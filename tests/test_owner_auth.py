@@ -5,7 +5,8 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from jegpant.memory import SignedOwnerApproval
@@ -21,6 +22,7 @@ from jegpant.owner_auth import (
     request_signing_bytes,
     revocation_signing_bytes,
 )
+from jegpant.signatures import ECDSA_P256
 
 
 INSTANCE_ID = str(uuid4())
@@ -336,3 +338,102 @@ def test_concurrent_replay_of_memory_approval_only_succeeds_once():
 
     assert outcomes.count(True) == 1
     assert outcomes.count(False) == 7
+
+
+
+def p256_public_bytes(private_key):
+    return private_key.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+
+
+def p256_sign(private_key, payload):
+    return private_key.sign(payload, ec.ECDSA(hashes.SHA256()))
+
+
+def test_p256_owner_and_device_signatures_are_supported():
+    owner_key = ec.generate_private_key(ec.SECP256R1())
+    device_key = ec.generate_private_key(ec.SECP256R1())
+    device_id = str(uuid4())
+    enrollment = DeviceEnrollment(
+        instance_id=INSTANCE_ID,
+        device_id=device_id,
+        device_public_key_b64=b64(p256_public_bytes(device_key)),
+        scopes=("read_evidence", "run_analysis"),
+        enrollment_id=str(uuid4()),
+        issued_at=ISSUED,
+        expires_at="2026-10-31T12:05:00Z",
+        owner_signature_b64="",
+        device_proof_b64="",
+        device_key_algorithm=ECDSA_P256,
+    )
+    payload = enrollment_signing_bytes(enrollment)
+    enrollment = replace(
+        enrollment,
+        owner_signature_b64=b64(p256_sign(owner_key, payload)),
+        device_proof_b64=b64(p256_sign(device_key, payload)),
+    )
+    service = OwnerAuthorizationService(
+        instance_id=INSTANCE_ID,
+        owner_public_key=p256_public_bytes(owner_key),
+        owner_key_algorithm=ECDSA_P256,
+        clock=lambda: NOW,
+    )
+    record = service.enroll_device(enrollment)
+
+    assert record.key_algorithm == ECDSA_P256
+    request = SignedDeviceRequest(
+        instance_id=INSTANCE_ID,
+        device_id=device_id,
+        request_id=str(uuid4()),
+        method="POST",
+        path="/v1/evidence",
+        issued_at=ISSUED,
+        expires_at=EXPIRES,
+        body_sha256=__import__("hashlib").sha256(b"payload").hexdigest(),
+        signature_b64="",
+    )
+    request = replace(
+        request,
+        signature_b64=b64(p256_sign(device_key, request_signing_bytes(request))),
+    )
+    verified = service.verify_request(
+        request, body=b"payload", required_scope="read_evidence"
+    )
+    assert verified.device_id == device_id
+
+
+def test_p256_owner_approval_verifier_supports_android_keystore_signatures():
+    owner_key = ec.generate_private_key(ec.SECP256R1())
+    verifier = Ed25519ApprovalVerifier(
+        instance_id=INSTANCE_ID,
+        owner_public_key=p256_public_bytes(owner_key),
+        owner_key_algorithm=ECDSA_P256,
+        key_id="owner-p256-v1",
+        clock=lambda: NOW,
+    )
+    approval = SignedOwnerApproval(
+        instance_id=INSTANCE_ID,
+        proposal_id="proposal-p256",
+        approval_id=str(uuid4()),
+        key_id="owner-p256-v1",
+        expires_at="2026-10-31T12:02:00Z",
+        signature=b"",
+    )
+    approval = replace(
+        approval,
+        signature=p256_sign(owner_key, owner_approval_signing_bytes(approval)),
+    )
+    assert verifier.verify(approval) is True
+    assert verifier.verify(approval) is False
+
+
+def test_p256_verifier_rejects_non_p256_ec_curve():
+    owner_key = ec.generate_private_key(ec.SECP384R1())
+    with pytest.raises(ValueError, match="P-256"):
+        OwnerAuthorizationService(
+            instance_id=INSTANCE_ID,
+            owner_public_key=p256_public_bytes(owner_key),
+            owner_key_algorithm=ECDSA_P256,
+        )
