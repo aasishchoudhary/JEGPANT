@@ -5,14 +5,27 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from math import isfinite
 from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import (
+    HTTPRedirectHandler,
+    ProxyHandler,
+    Request,
+    build_opener,
+)
 
 
 class InferenceProviderError(RuntimeError):
     """A safe, content-free inference transport or response error."""
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    """Prevent a local inference endpoint from redirecting prompts elsewhere."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,8 +62,12 @@ class OpenAICompatibleClient:
     """Minimal adapter for local OpenAI-compatible inference servers.
 
     Remote hosts are rejected unless allow_remote=True, HTTPS is used, and an
-    API key is supplied. The caller remains responsible for provider review.
+    API key is supplied. Redirects and implicit environment proxies are
+    disabled so a loopback request cannot silently leave the local boundary.
+    The caller remains responsible for provider review and endpoint isolation.
     """
+
+    MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
     def __init__(
         self,
@@ -63,12 +80,15 @@ class OpenAICompatibleClient:
     ) -> None:
         if not model.strip():
             raise ValueError("model must not be empty")
-        if timeout_seconds <= 0:
-            raise ValueError("timeout_seconds must be positive")
+        if not isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be finite and positive")
+        api_key = api_key.strip() if api_key else None
         self.base_url = self._validate_base_url(base_url, allow_remote, api_key)
         self.model = model
         self.api_key = api_key
         self.timeout_seconds = timeout_seconds
+        # Do not inherit system proxy settings for private inference traffic.
+        self._opener = build_opener(ProxyHandler({}), _NoRedirectHandler())
 
     @classmethod
     def from_environment(cls) -> "OpenAICompatibleClient":
@@ -97,8 +117,6 @@ class OpenAICompatibleClient:
         host = parsed.hostname.lower()
         local_hosts = {"localhost", "127.0.0.1", "::1"}
         is_local = host in local_hosts
-        if is_local and parsed.scheme != "http" and parsed.scheme != "https":
-            raise ValueError("unsupported local URL scheme")
         if not is_local:
             if not allow_remote:
                 raise ValueError(
@@ -120,8 +138,8 @@ class OpenAICompatibleClient:
     ) -> ChatResponse:
         if not messages:
             raise ValueError("at least one message is required")
-        if not 0.0 <= temperature <= 2.0:
-            raise ValueError("temperature must be between 0 and 2")
+        if not isfinite(temperature) or not 0.0 <= temperature <= 2.0:
+            raise ValueError("temperature must be finite and between 0 and 2")
         if max_tokens <= 0:
             raise ValueError("max_tokens must be positive")
 
@@ -144,8 +162,8 @@ class OpenAICompatibleClient:
             method="POST",
         )
         try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
-                response_body = response.read()
+            with self._opener.open(request, timeout=self.timeout_seconds) as response:
+                response_body = response.read(self.MAX_RESPONSE_BYTES + 1)
         except HTTPError as exc:
             raise InferenceProviderError(
                 f"inference endpoint returned HTTP {exc.code}"
@@ -154,6 +172,9 @@ class OpenAICompatibleClient:
             raise InferenceProviderError(
                 "inference endpoint could not be reached or timed out"
             ) from None
+
+        if len(response_body) > self.MAX_RESPONSE_BYTES:
+            raise InferenceProviderError("inference response exceeded the size limit")
 
         try:
             result = json.loads(response_body.decode("utf-8"))
