@@ -6,7 +6,7 @@ JEGPANT is being developed as a persistent cognitive system, not a character sim
 
 The implementation is being built as a hybrid system: explicit cognitive state and typed evidence models, deterministic controls, specialist processors, and model-provider adapters. A language model is a reasoning component—not the identity, memory, policy engine, or complete mind.
 
-> **Development status:** foundation and prototype stage. The repository now contains an encrypted SQLite memory-record store with an external key-provider interface, a deterministic epistemic core, a loopback-default inference adapter, a structured hypothesis generator, architecture specifications, and automated tests. It does not yet contain production owner key custody, owner recovery, a deployed private backend, an Android application, a trained model, or validated psychological inference.
+> **Development status:** foundation and prototype stage. The repository now contains an encrypted SQLite memory-record store with an external key-provider interface, local video metadata intake, a deterministic epistemic core, a loopback-default inference adapter, a structured hypothesis generator, architecture specifications, and automated tests. It does not yet contain production owner key custody, owner recovery, a deployed private backend, an Android application, a trained model, or validated psychological inference.
 
 ## Non-negotiable design principles
 
@@ -24,6 +24,7 @@ The implementation is being built as a hybrid system: explicit cognitive state a
 - [x] Establish project charter, cognitive architecture, and system boundaries.
 - [x] Define single-owner identity, device trust, recovery, and privacy model.
 - [x] Define asynchronous post-hoc video evidence pipeline.
+- [x] Add local video hashing and bounded ffprobe metadata intake.
 - [x] Add append-only evidence ledger with hash-chain verification.
 - [x] Add typed hypotheses, evidence-linked claims, and contradiction-preserving comparison.
 - [x] Add temporal video metadata and event-timeline primitives.
@@ -33,18 +34,19 @@ The implementation is being built as a hybrid system: explicit cognitive state a
 - [x] Add key-version rotation and ciphertext integrity tests.
 - [x] Add forecast resolution and Brier-score calibration primitives.
 - [x] Add loopback-default OpenAI-compatible inference client and structured hypothesis generation.
-- [x] Add GitHub Actions matrix and static checks.
+- [x] Add GitHub Actions matrix, compile and Ruff checks.
 - [ ] Implement production Android Keystore/HSM-backed key provider and owner recovery.
+- [ ] Implement encrypted media vault, upload workflow, and sandboxed media workers.
 - [ ] Implement encrypted backup/restore and deletion lifecycle.
 - [ ] Implement durable cognitive-state orchestration and temporal knowledge graph.
-- [ ] Add multimodal video decoding, frame/event extraction, and temporal retrieval.
+- [ ] Add frame/audio extraction, visual indexing, event detection, and temporal retrieval.
 - [ ] Add model-provider evaluation, red-team benchmarks, and calibration datasets.
 - [ ] Build the owner-bound Android application and device enrolment.
 - [ ] Complete independent security review and deployment acceptance tests.
 
 ## Quick start
 
-Requires Python 3.11 or newer.
+Requires Python 3.11 or newer and FFmpeg/ffprobe for local video metadata intake.
 
 ```bash
 python -m venv .venv
@@ -61,10 +63,12 @@ The package makes no inference request automatically. The OpenAI-compatible adap
 
 The encrypted memory store requires an externally supplied 32-byte data key. Do not use a source-code constant or a plaintext environment variable as the production key source. The repository does not yet provide Android Keystore, HSM, or owner-recovery integration. Review [MEMORY_AND_METACOGNITION.md](docs/MEMORY_AND_METACOGNITION.md).
 
+The video intake helper only hashes and probes metadata. It does not decode frames or analyse people. Production media parsing requires a hardened, unprivileged sandbox. Review [VIDEO_EVIDENCE_PIPELINE.md](docs/VIDEO_EVIDENCE_PIPELINE.md).
+
 ## Repository map
 
-- `src/jegpant/` — evidence, claims, hypotheses, video, memory, encrypted storage, workspace, metacognition, and inference primitives.
-- `tests/` — executable behavioural, integrity, and encryption tests.
+- `src/jegpant/` — evidence, claims, hypotheses, video, media intake, memory, encrypted storage, workspace, metacognition, and inference primitives.
+- `tests/` — executable behavioural, integrity, encryption, and media-intake tests.
 - `docs/PRODUCT_CHARTER.md` — product definition and non-goals.
 - `docs/COGNITIVE_ARCHITECTURE.md` — cognitive processes, state, specialist roles, and memory lifecycle.
 - `docs/SYSTEM_ARCHITECTURE.md` — deployment boundaries and data flow.
