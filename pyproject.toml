@@ -13,7 +13,7 @@ authors = [{ name = "JEGPANT maintainers" }]
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "ruff>=0.11"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
