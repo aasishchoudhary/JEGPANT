@@ -9,11 +9,15 @@ Transient conversation text is not automatically durable memory. The system crea
 - contextual tags;
 - review lifecycle.
 
-The `MemoryCatalog` is the proposal layer. A proposal can only be promoted after an external owner-authorization service verifies signed approval bound to the instance and proposal. The LLM must not mint or validate owner approval.
+The `MemoryCatalog` is the process-local proposal layer. A proposal can only be promoted after an external owner-authorization service verifies signed approval bound to the instance and proposal. The LLM must not mint or validate owner approval.
+
+`MemoryPromotionService` now connects that approval step to the encrypted SQLite store. An owner-approved proposal is materialised as a durable `MemoryRecord`; a deterministic record ID derived from instance ID and proposal ID makes promotion idempotent. Retrieval authenticates and decrypts the record. Reusing a proposal ID for different content is rejected.
+
+The current promoter does not persist unapproved proposals. It also does not yet implement owner-approved deletion, versioned supersession, semantic retrieval, or distributed locking across processes.
 
 ## Encrypted persistent store prototype
 
-`EncryptedMemoryStore` is the first persistent memory-storage component. It stores one cognitive instance's memory records in SQLite and encrypts each record using AES-256-GCM. The encrypted payload includes the summary, provenance references, sensitivity, tags, timestamps, and approval reference. The database retains only a memory ID, key version, schema version, nonce, and ciphertext as routing metadata.
+`EncryptedMemoryStore` stores one cognitive instance's memory records in SQLite and encrypts each record using AES-256-GCM. The encrypted payload includes the summary, provenance references, sensitivity, tags, timestamps, and approval reference. The database retains only a memory ID, key version, schema version, nonce, and ciphertext as routing metadata.
 
 The cryptographic key is supplied by an external `DataKeyProvider`; it is not stored in SQLite, generated from a user password, or committed to source control. The intended production key sources are hardware-backed Android Keystore, a suitable HSM/KMS integration, or an owner-controlled recovery/key-wrapping flow. The current repository provides only the interface and tests; it does **not** yet implement these real key providers.
 
@@ -21,8 +25,10 @@ Security properties:
 - Each record receives a fresh 96-bit random nonce.
 - The AES-GCM authentication tag protects both ciphertext and associated data.
 - Associated data binds the encrypted record to the JEGPANT instance, memory ID, key version, and schema version.
-- A key-versioned rotation operation decrypts and re-encrypts records transactionally.
+- A key-versioned rotation operation re-encrypts records transactionally.
 - SQLite `secure_delete` is enabled as a secondary storage hygiene control.
+- The memory promotion path verifies an owner signature before writing a durable record.
+- A second promotion of the same proposal and same content returns the existing record rather than duplicating it.
 
 Critical limitations:
 - A key provider that returns a key from a plaintext environment variable, local file, or source code defeats the intended key-custody boundary.
@@ -30,6 +36,7 @@ Critical limitations:
 - Memory IDs and key/schema versions remain visible in SQLite metadata.
 - SQLite's secure-delete setting is not a universal forensic-erasure guarantee; backups, filesystem snapshots, flash wear-levelled blocks, crash dumps, and replicas require separate retention and destruction policies.
 - The present store has no semantic search/index, owner recovery, backup encryption protocol, server attestation, or Android Keystore adapter.
+- Promotion verifies approval before persistence, but a database failure after one-time approval consumes that approval; the owner must issue a fresh approval to retry.
 - This component has not received an independent security review and is not production-ready.
 
 The implementation uses the maintained PyCA `cryptography` AESGCM API. Its documentation explicitly warns that a nonce must never be reused with the same key: https://cryptography.io/en/latest/hazmat/primitives/aead/
