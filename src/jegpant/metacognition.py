@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from math import isfinite
 
 
@@ -46,7 +46,7 @@ def resolve_forecast(
         forecast=forecast,
         outcome=outcome,
         verification_ref=verification_ref,
-        resolved_at=datetime.now(timezone.utc).isoformat(),
+        resolved_at=datetime.now(UTC).isoformat(),
         brier_score=score,
     )
 
