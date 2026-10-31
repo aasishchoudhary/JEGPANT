@@ -17,9 +17,11 @@ from starlette.concurrency import run_in_threadpool
 from .case_store import EncryptedCaseStore
 from .job_queue import AnalysisJobQueue
 from .owner_auth import (
+    DeviceEnrollment,
     OwnerAuthorizationError,
     OwnerAuthorizationService,
     SignedDeviceRequest,
+    SignedDeviceRevocation,
 )
 from .runtime import InvestigationEvidence
 from .media_vault import EncryptedMediaVault, MediaVaultError, MediaVaultIntegrityError
@@ -169,6 +171,110 @@ def create_app(
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="JSON body must be an object")
         return payload
+
+    @app.post("/v1/devices/enroll", status_code=201)
+    async def enroll_device(request: Request):
+        """Add a device only with owner authorisation and device proof-of-possession."""
+        body = await read_body(request)
+        payload = await parse_json(body)
+        required = {
+            "instance_id",
+            "device_id",
+            "device_public_key_b64",
+            "device_key_algorithm",
+            "scopes",
+            "enrollment_id",
+            "issued_at",
+            "expires_at",
+            "owner_signature_b64",
+            "device_proof_b64",
+        }
+        if set(payload) != required:
+            raise HTTPException(status_code=400, detail="Device enrollment fields are invalid")
+        if (
+            not isinstance(payload["scopes"], list)
+            or any(not isinstance(scope, str) for scope in payload["scopes"])
+        ):
+            raise HTTPException(status_code=400, detail="Device scopes are invalid")
+        try:
+            enrollment = DeviceEnrollment(
+                instance_id=payload["instance_id"],
+                device_id=payload["device_id"],
+                device_public_key_b64=payload["device_public_key_b64"],
+                device_key_algorithm=payload["device_key_algorithm"],
+                scopes=tuple(payload["scopes"]),
+                enrollment_id=payload["enrollment_id"],
+                issued_at=payload["issued_at"],
+                expires_at=payload["expires_at"],
+                owner_signature_b64=payload["owner_signature_b64"],
+                device_proof_b64=payload["device_proof_b64"],
+            )
+            record = await run_in_threadpool(authorization.enroll_device, enrollment)
+        except OwnerAuthorizationError:
+            raise HTTPException(
+                status_code=403,
+                detail="Owner-signed device enrollment was rejected",
+            ) from None
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Device enrollment is invalid") from None
+        except RuntimeError:
+            raise HTTPException(
+                status_code=503,
+                detail="Authorization state is temporarily unavailable",
+            ) from None
+
+        return {
+            "device_id": record.device_id,
+            "key_algorithm": record.key_algorithm,
+            "scopes": sorted(record.scopes),
+            "status": "enrolled",
+        }
+
+    @app.post("/v1/devices/{device_id}/revoke")
+    async def revoke_device(device_id: str, request: Request):
+        """Revoke a device with a short-lived signature from the owner key."""
+        body = await read_body(request)
+        payload = await parse_json(body)
+        required = {
+            "instance_id",
+            "device_id",
+            "revocation_id",
+            "issued_at",
+            "expires_at",
+            "owner_signature_b64",
+        }
+        if set(payload) != required or payload.get("device_id") != device_id:
+            raise HTTPException(status_code=400, detail="Device revocation fields are invalid")
+        try:
+            revocation = SignedDeviceRevocation(
+                instance_id=payload["instance_id"],
+                device_id=payload["device_id"],
+                revocation_id=payload["revocation_id"],
+                issued_at=payload["issued_at"],
+                expires_at=payload["expires_at"],
+                owner_signature_b64=payload["owner_signature_b64"],
+            )
+            record = await run_in_threadpool(
+                authorization.revoke_device, revocation
+            )
+        except OwnerAuthorizationError:
+            raise HTTPException(
+                status_code=403,
+                detail="Owner-signed device revocation was rejected",
+            ) from None
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Device revocation is invalid") from None
+        except RuntimeError:
+            raise HTTPException(
+                status_code=503,
+                detail="Authorization state is temporarily unavailable",
+            ) from None
+
+        return {
+            "device_id": record.device_id,
+            "revoked_at": record.revoked_at,
+            "status": "revoked",
+        }
 
     @app.get("/health/live", include_in_schema=False)
     async def health_live() -> dict[str, str]:
