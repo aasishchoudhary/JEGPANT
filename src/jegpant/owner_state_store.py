@@ -5,38 +5,10 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from contextlib import closing
 from pathlib import Path
-from typing import Protocol
 
 from .owner_auth import DeviceRecord
-
-
-class OwnerStateStore(Protocol):
-    """Atomic state operations required by the owner authorization service."""
-
-    instance_id: str
-
-    def register_device(self, enrollment_id: str, record: DeviceRecord) -> bool:
-        """Atomically register a device and consume an enrolment ID."""
-        ...
-
-    def get_device(self, device_id: str) -> DeviceRecord | None:
-        """Return current device registration state."""
-        ...
-
-    def consume_request(self, request_id: str, expires_at: str) -> bool:
-        """Atomically consume a request ID once."""
-        ...
-
-    def revoke_device(
-        self, device_id: str, revocation_id: str, revoked_at: str
-    ) -> DeviceRecord | None:
-        """Atomically consume a revocation ID and revoke one active device."""
-        ...
-
-    def consume_approval(self, approval_id: str, expires_at: str) -> bool:
-        """Atomically consume an owner approval ID once."""
-        ...
 
 
 class InMemoryOwnerStateStore:
@@ -66,13 +38,24 @@ class InMemoryOwnerStateStore:
         with self._lock:
             return self._devices.get(device_id)
 
-    def consume_request(self, request_id: str, expires_at: str) -> bool:
+    def authorize_request(
+        self,
+        device_id: str,
+        required_scope: str,
+        request_id: str,
+        expires_at: str,
+    ) -> str:
         del expires_at
         with self._lock:
+            device = self._devices.get(device_id)
+            if device is None or device.revoked_at is not None:
+                return "inactive"
+            if required_scope not in device.scopes:
+                return "scope"
             if request_id in self._request_ids:
-                return False
+                return "replay"
             self._request_ids.add(request_id)
-            return True
+            return "ok"
 
     def revoke_device(
         self, device_id: str, revocation_id: str, revoked_at: str
@@ -106,12 +89,12 @@ class InMemoryOwnerStateStore:
 
 
 class SQLiteOwnerStateStore:
-    """SQLite-backed state store using BEGIN IMMEDIATE and uniqueness constraints.
+    """SQLite-backed owner state with atomic, cross-process replay prevention.
 
-    A new connection is opened per operation. SQLite serializes writes across
-    threads and processes; unique constraints provide the final replay/enrolment
-    arbitration. This store is suitable for a single-host deployment using a
-    local filesystem. Do not place its database on an arbitrary network share.
+    A new connection is opened per operation. SQLite serializes writers across
+    threads and processes; unique constraints provide the final arbitration.
+    This store is intended for one host with a local filesystem, not an
+    arbitrary network share or a multi-region deployment.
     """
 
     def __init__(
@@ -125,11 +108,12 @@ class SQLiteOwnerStateStore:
             raise ValueError("instance_id must not be empty")
         if busy_timeout_ms <= 0:
             raise ValueError("busy_timeout_ms must be positive")
+        if str(database_path) == ":memory:":
+            raise ValueError("SQLiteOwnerStateStore requires a persistent database path")
         self.instance_id = instance_id
         self.database_path = str(database_path)
         self.busy_timeout_ms = busy_timeout_ms
-        if self.database_path != ":memory:":
-            Path(self.database_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(self.database_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_lock = threading.Lock()
         self._initialise()
 
@@ -144,7 +128,7 @@ class SQLiteOwnerStateStore:
         return connection
 
     def _initialise(self) -> None:
-        with self._init_lock, self._connect() as connection:
+        with self._init_lock, closing(self._connect()) as connection:
             connection.execute("PRAGMA journal_mode = WAL")
             connection.execute(
                 """
@@ -201,10 +185,10 @@ class SQLiteOwnerStateStore:
     def register_device(self, enrollment_id: str, record: DeviceRecord) -> bool:
         if not enrollment_id.strip():
             raise ValueError("enrollment_id must not be empty")
-        if record.device_id.strip() == "":
+        if not record.device_id.strip():
             raise ValueError("device_id must not be empty")
         try:
-            with self._connect() as connection:
+            with closing(self._connect()) as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 connection.execute(
                     "INSERT INTO owner_enrollments VALUES (?, ?)",
@@ -230,7 +214,7 @@ class SQLiteOwnerStateStore:
             return False
 
     def get_device(self, device_id: str) -> DeviceRecord | None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             row = connection.execute(
                 """
                 SELECT device_id, public_key, scopes_json, enrolled_at, revoked_at
@@ -241,32 +225,67 @@ class SQLiteOwnerStateStore:
             ).fetchone()
         if row is None:
             return None
+        try:
+            scopes = json.loads(row[2])
+        except (TypeError, json.JSONDecodeError):
+            raise RuntimeError("stored device permission data is invalid") from None
+        if not isinstance(scopes, list) or any(not isinstance(item, str) for item in scopes):
+            raise RuntimeError("stored device permission data is invalid")
         return DeviceRecord(
             device_id=row[0],
             public_key=bytes(row[1]),
-            scopes=frozenset(json.loads(row[2])),
+            scopes=frozenset(scopes),
             enrolled_at=row[3],
             revoked_at=row[4],
         )
 
-    def consume_request(self, request_id: str, expires_at: str) -> bool:
+    def authorize_request(
+        self,
+        device_id: str,
+        required_scope: str,
+        request_id: str,
+        expires_at: str,
+    ) -> str:
         try:
-            with self._connect() as connection:
+            with closing(self._connect()) as connection:
                 connection.execute("BEGIN IMMEDIATE")
-                connection.execute(
-                    "INSERT INTO owner_used_requests VALUES (?, ?, ?)",
-                    (self.instance_id, request_id, expires_at),
-                )
+                row = connection.execute(
+                    """
+                    SELECT scopes_json, revoked_at
+                    FROM owner_devices
+                    WHERE instance_id = ? AND device_id = ?
+                    """,
+                    (self.instance_id, device_id),
+                ).fetchone()
+                if row is None or row[1] is not None:
+                    connection.rollback()
+                    return "inactive"
+                try:
+                    scopes = json.loads(row[0])
+                except (TypeError, json.JSONDecodeError):
+                    connection.rollback()
+                    raise RuntimeError("stored device permission data is invalid") from None
+                if not isinstance(scopes, list) or required_scope not in scopes:
+                    connection.rollback()
+                    return "scope"
+                try:
+                    connection.execute(
+                        "INSERT INTO owner_used_requests VALUES (?, ?, ?)",
+                        (self.instance_id, request_id, expires_at),
+                    )
+                except sqlite3.IntegrityError:
+                    connection.rollback()
+                    return "replay"
                 connection.commit()
-            return True
-        except sqlite3.IntegrityError:
-            return False
+                return "ok"
+        except sqlite3.OperationalError as exc:
+            raise RuntimeError("authorization state store is temporarily unavailable") from exc
 
     def revoke_device(
         self, device_id: str, revocation_id: str, revoked_at: str
     ) -> DeviceRecord | None:
         try:
-            with self._connect() as connection:
+            with closing(self._connect()) as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 connection.execute(
                     "INSERT INTO owner_revocations VALUES (?, ?)",
@@ -290,7 +309,7 @@ class SQLiteOwnerStateStore:
 
     def consume_approval(self, approval_id: str, expires_at: str) -> bool:
         try:
-            with self._connect() as connection:
+            with closing(self._connect()) as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 connection.execute(
                     "INSERT INTO owner_approvals VALUES (?, ?, ?)",
@@ -300,14 +319,24 @@ class SQLiteOwnerStateStore:
             return True
         except sqlite3.IntegrityError:
             return False
+        except sqlite3.OperationalError as exc:
+            raise RuntimeError("approval state store is temporarily unavailable") from exc
 
-    def count_active_devices(self) -> int:
-        with self._connect() as connection:
-            row = connection.execute(
-                """
-                SELECT COUNT(*) FROM owner_devices
-                WHERE instance_id = ? AND revoked_at IS NULL
-                """,
-                (self.instance_id,),
-            ).fetchone()
-        return int(row[0])
+    def counts(self) -> dict[str, int]:
+        """Return operational counts without exposing identifiers or private data."""
+        tables = {
+            "devices": "owner_devices",
+            "enrollments": "owner_enrollments",
+            "requests": "owner_used_requests",
+            "revocations": "owner_revocations",
+            "approvals": "owner_approvals",
+        }
+        result: dict[str, int] = {}
+        with closing(self._connect()) as connection:
+            for name, table in tables.items():
+                row = connection.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE instance_id = ?",
+                    (self.instance_id,),
+                ).fetchone()
+                result[name] = int(row[0])
+        return result
