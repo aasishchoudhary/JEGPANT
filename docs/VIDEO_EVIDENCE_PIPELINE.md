@@ -6,6 +6,22 @@ The owner uploads a recorded video. JEGPANT performs asynchronous analysis and m
 
 Video analysis is an evidence acquisition and organisation process. It is not a reliable lie detector, guilt detector, or direct window into a person's private mental state.
 
+## Current implementation boundary
+
+The repository now includes `probe_local_video()` in `src/jegpant/media_intake.py`. It:
+- accepts an existing regular file and rejects symbolic-link paths;
+- enforces a configurable source-file size limit;
+- computes a SHA-256 digest in chunks;
+- invokes `ffprobe` using an argument array, never shell interpolation;
+- disables network protocols with `-protocol_whitelist file`;
+- applies an FFmpeg allocation cap and a timeout;
+- limits the returned metadata size;
+- avoids exposing probe stderr, which may contain private paths;
+- detects common source-file changes during inspection;
+- validates codec, dimensions, duration, frame rate and audio-stream presence.
+
+The intake primitive does **not** decode frames, extract audio, detect people, track objects, or analyse behaviour. It is a first gate, not a complete video-analysis pipeline. Production must run media parsers in a sandboxed, unprivileged worker with restricted filesystem access and no network egress; command-line restrictions alone are not a sandbox.
+
 ## Pipeline
 
 ### 1. Secure intake
@@ -14,6 +30,9 @@ Video analysis is an evidence acquisition and organisation process. It is not a 
 - Keep the original immutable.
 - Assign an asset ID and investigation/case ID.
 - Encrypt and store inside the private media boundary.
+
+**Implemented:** source hashing, size checks, basic ffprobe metadata, no-shell execution, network-protocol restriction, bounded timeout/output and source-change checks.  
+**Not yet implemented:** immutable encrypted media vault, production sandbox, upload API, malware scanning, full container validation and owner-device upload workflow.
 
 ### 2. Timeline normalisation
 - Use media timestamps and presentation timestamps, not assumed frame-number arithmetic alone.
@@ -54,6 +73,8 @@ Represent events with:
 - direct observation text;
 - extractor provenance and uncertainty;
 - reviewer status.
+
+The current timeline primitive stores event time intervals, track IDs, extractor version and limitations. Its optional extraction-confidence field is an extractor score, not a probability that the event interpretation is true.
 
 ### 7. Investigative reasoning
 - Generate several plausible explanations.
