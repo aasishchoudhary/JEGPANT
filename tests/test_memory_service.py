@@ -183,7 +183,15 @@ def test_owner_approved_memory_is_encrypted_and_persistent(tmp_path):
     assert proposal.summary.encode() not in raw
 
     with open_store(path) as reopened:
-        recovered = retrieve(service, device_key, device_id, proposal.proposal_id)
+        restarted_service = MemoryPromotionService(
+            instance_id=INSTANCE_ID,
+            verifier=service.verifier,
+            authorization_service=service.authorization_service,
+            store=reopened,
+        )
+        recovered = retrieve(
+            restarted_service, device_key, device_id, proposal.proposal_id
+        )
         assert recovered == record
 
 
