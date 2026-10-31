@@ -6,7 +6,8 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from jegpant.memory import SignedOwnerApproval
@@ -23,6 +24,7 @@ from jegpant.owner_auth import (
     revocation_signing_bytes,
 )
 from jegpant.owner_state_store import SQLiteOwnerStateStore
+from jegpant.signatures import ECDSA_P256
 
 
 INSTANCE_ID = str(uuid4())
@@ -250,3 +252,76 @@ def test_sqlite_state_is_scoped_by_instance_id(tmp_path):
 def test_sqlite_store_rejects_in_memory_path(tmp_path):
     with pytest.raises(ValueError, match="persistent database path"):
         SQLiteOwnerStateStore(":memory:", instance_id=INSTANCE_ID)
+
+
+
+def test_p256_device_algorithm_persists_across_sqlite_restart(tmp_path):
+    path = tmp_path / "owner-state-p256.sqlite"
+    owner_key = ec.generate_private_key(ec.SECP256R1())
+    device_key = ec.generate_private_key(ec.SECP256R1())
+
+    def der_public(key):
+        return key.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+
+    now = datetime.now(UTC)
+    enrollment = DeviceEnrollment(
+        instance_id=INSTANCE_ID,
+        device_id=str(uuid4()),
+        device_public_key_b64=b64(der_public(device_key)),
+        scopes=("read_memory",),
+        enrollment_id=str(uuid4()),
+        issued_at=now.isoformat(),
+        expires_at=(now + timedelta(minutes=2)).isoformat(),
+        owner_signature_b64="",
+        device_proof_b64="",
+        device_key_algorithm=ECDSA_P256,
+    )
+    payload = enrollment_signing_bytes(enrollment)
+    enrollment = replace(
+        enrollment,
+        owner_signature_b64=b64(owner_key.sign(payload, ec.ECDSA(hashes.SHA256()))),
+        device_proof_b64=b64(device_key.sign(payload, ec.ECDSA(hashes.SHA256()))),
+    )
+    owner_public = der_public(owner_key)
+
+    first = OwnerAuthorizationService(
+        instance_id=INSTANCE_ID,
+        owner_public_key=owner_public,
+        owner_key_algorithm=ECDSA_P256,
+        state_store=SQLiteOwnerStateStore(path, instance_id=INSTANCE_ID),
+    )
+    first.enroll_device(enrollment)
+
+    second = OwnerAuthorizationService(
+        instance_id=INSTANCE_ID,
+        owner_public_key=owner_public,
+        owner_key_algorithm=ECDSA_P256,
+        state_store=SQLiteOwnerStateStore(path, instance_id=INSTANCE_ID),
+    )
+    persisted = second.get_device(enrollment.device_id)
+    assert persisted is not None
+    assert persisted.key_algorithm == ECDSA_P256
+
+    request = SignedDeviceRequest(
+        instance_id=INSTANCE_ID,
+        device_id=enrollment.device_id,
+        request_id=str(uuid4()),
+        method="GET",
+        path="/v1/private",
+        issued_at=now.isoformat(),
+        expires_at=(now + timedelta(seconds=45)).isoformat(),
+        body_sha256=hashlib.sha256(b"").hexdigest(),
+        signature_b64="",
+    )
+    request = replace(
+        request,
+        signature_b64=b64(
+            device_key.sign(request_signing_bytes(request), ec.ECDSA(hashes.SHA256()))
+        ),
+    )
+    assert second.verify_request(
+        request, body=b"", required_scope="read_memory"
+    ).key_algorithm == ECDSA_P256
