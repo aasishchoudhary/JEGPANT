@@ -293,7 +293,17 @@ def create_app(
                 expected_sha256=expected_sha256,
             )
             await run_in_threadpool(cases.add_media_asset, case_id, entry)
+        except HTTPException:
+            try:
+                await run_in_threadpool(media_vault.delete, asset_id)
+            except Exception:
+                pass
+            raise
         except KeyError:
+            try:
+                await run_in_threadpool(media_vault.delete, asset_id)
+            except Exception:
+                pass
             raise HTTPException(status_code=404, detail="Case not found") from None
         except FileExistsError:
             raise HTTPException(status_code=409, detail="Media asset already exists") from None
