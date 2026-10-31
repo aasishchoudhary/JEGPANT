@@ -357,3 +357,22 @@ def test_device_with_only_propose_scope_cannot_retrieve_memory(tmp_path):
         )
         with pytest.raises(PermissionError, match="lacks"):
             service.retrieve(proposal.proposal_id, request)
+
+
+
+def test_memory_service_rejects_separate_process_local_replay_stores(tmp_path):
+    authorization_service, _, owner_key, _, _ = setup_security()
+    isolated_verifier = Ed25519ApprovalVerifier(
+        instance_id=INSTANCE_ID,
+        owner_public_key=public_bytes(owner_key),
+        key_id="owner-key-v1",
+        state_store=InMemoryOwnerStateStore(INSTANCE_ID),
+    )
+    with open_store(tmp_path / "memory.sqlite") as store:
+        with pytest.raises(ValueError, match="share the same persistent state store"):
+            MemoryPromotionService(
+                instance_id=INSTANCE_ID,
+                verifier=isolated_verifier,
+                authorization_service=authorization_service,
+                store=store,
+            )
