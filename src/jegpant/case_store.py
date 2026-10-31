@@ -129,6 +129,17 @@ class EncryptedCaseStore:
 
                 CREATE INDEX IF NOT EXISTS idx_case_reports_order
                     ON case_reports(instance_id, case_id, created_at);
+
+                CREATE TABLE IF NOT EXISTS case_job_results (
+                    instance_id TEXT NOT NULL,
+                    case_id TEXT NOT NULL,
+                    job_key TEXT NOT NULL,
+                    investigation_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (instance_id, case_id, job_key),
+                    FOREIGN KEY (instance_id, case_id)
+                        REFERENCES cases(instance_id, case_id)
+                );
                 """
             )
 
@@ -328,14 +339,37 @@ class EncryptedCaseStore:
             records.append(item)
         return tuple(records)
 
-    def store_result(self, case_id: str, result: InvestigationResult) -> None:
-        """Append an encrypted investigation report bound to the case evidence manifest."""
+    def store_result(
+        self,
+        case_id: str,
+        result: InvestigationResult,
+        *,
+        job_id: str | None = None,
+    ) -> str:
+        """Persist one encrypted report, optionally idempotent by analysis-job ID."""
         if not self.case_exists(case_id):
             raise KeyError(case_id)
         evidence = self.list_evidence(case_id)
         actual_manifest = self._manifest_digest(evidence)
         if actual_manifest != result.evidence_manifest_sha256:
             raise ValueError("investigation result does not match the current case evidence set")
+
+        job_key = None
+        if job_id is not None:
+            try:
+                UUID(job_id)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("job_id must be a UUID") from exc
+            job_key = self._lookup_digest("job", job_id)
+            existing_id = self.get_job_result_id(case_id, job_id)
+            if existing_id is not None:
+                existing = self.get_result(case_id, existing_id)
+                if (
+                    existing.get("evidence_manifest_sha256") != result.evidence_manifest_sha256
+                    or existing.get("goal") != result.goal
+                ):
+                    raise ValueError("job ID already identifies a different investigation")
+                return existing_id
 
         report_payload = result.as_dict()
         investigation_key = self._lookup_digest(
@@ -348,6 +382,7 @@ class EncryptedCaseStore:
 
         try:
             with closing(self._connect()) as connection:
+                connection.execute("BEGIN IMMEDIATE")
                 connection.execute(
                     """
                     INSERT INTO case_reports(
@@ -366,8 +401,38 @@ class EncryptedCaseStore:
                         datetime.now(UTC).isoformat(),
                     ),
                 )
+                if job_key is not None:
+                    connection.execute(
+                        """
+                        INSERT INTO case_job_results(
+                            instance_id, case_id, job_key, investigation_id, created_at
+                        ) VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            self.instance_id,
+                            case_id,
+                            job_key,
+                            result.investigation_id,
+                            datetime.now(UTC).isoformat(),
+                        ),
+                    )
+                connection.commit()
         except sqlite3.IntegrityError as exc:
-            raise ValueError("investigation report already exists") from exc
+            raise ValueError("investigation report or job result already exists") from exc
+        return result.investigation_id
+
+    def get_job_result_id(self, case_id: str, job_id: str) -> str | None:
+        """Return the already persisted result for a job, if one exists."""
+        job_key = self._lookup_digest("job", job_id)
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT investigation_id FROM case_job_results
+                WHERE instance_id = ? AND case_id = ? AND job_key = ?
+                """,
+                (self.instance_id, case_id, job_key),
+            ).fetchone()
+        return None if row is None else str(row[0])
 
     @staticmethod
     def _manifest_digest(evidence: tuple[InvestigationEvidence, ...]) -> str:
