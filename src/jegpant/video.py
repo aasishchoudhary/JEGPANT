@@ -50,11 +50,11 @@ class VideoMetadata:
     @classmethod
     def from_ffprobe(
         cls, payload: dict[str, Any], *, asset_id: str, source_sha256: str
-    ) -> "VideoMetadata":
+    ) -> VideoMetadata:
         """Create metadata from ffprobe JSON using format and stream fields."""
         streams = payload.get("streams")
         if not isinstance(streams, list):
-            raise ValueError("ffprobe payload must contain a streams list")
+            raise TypeError("ffprobe payload must contain a streams list")
         video_stream = next(
             (stream for stream in streams if stream.get("codec_type") == "video"),
             None,
