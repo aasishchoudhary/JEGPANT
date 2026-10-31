@@ -172,6 +172,16 @@ def create_app(
             raise HTTPException(status_code=400, detail="JSON body must be an object")
         return payload
 
+    @app.get("/health/identity", include_in_schema=False)
+    async def health_identity() -> dict[str, object]:
+        """Expose non-secret instance/key identity for owner app pinning."""
+        return {
+            "instance_id": instance_id,
+            "owner_key_algorithm": authorization.owner_key_algorithm,
+            "owner_key_fingerprint_sha256": authorization.owner_key_fingerprint,
+            "supported_device_key_algorithms": ["ecdsa_p256", "ed25519"],
+        }
+
     @app.post("/v1/devices/enroll", status_code=201)
     async def enroll_device(request: Request):
         """Add a device only with owner authorisation and device proof-of-possession."""
