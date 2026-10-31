@@ -6,7 +6,7 @@ JEGPANT is being developed as a persistent cognitive system, not a character sim
 
 The implementation is being built as a hybrid system: explicit cognitive state and typed evidence models, deterministic controls, specialist processors, and model-provider adapters. A language model is a reasoning component—not the identity, memory, policy engine, or complete mind.
 
-> **Development status:** foundation stage. The repository contains architecture specifications, a deterministic epistemic core, a loopback-default inference adapter, a structured hypothesis generator, and automated tests. It does not yet contain encrypted persistent memory, a production backend, an Android application, a trained model, or a validated psychological inference system.
+> **Development status:** foundation and prototype stage. The repository now contains an encrypted SQLite memory-record store with an external key-provider interface, a deterministic epistemic core, a loopback-default inference adapter, a structured hypothesis generator, architecture specifications, and automated tests. It does not yet contain production owner key custody, owner recovery, a deployed private backend, an Android application, a trained model, or validated psychological inference.
 
 ## Non-negotiable design principles
 
@@ -28,12 +28,15 @@ The implementation is being built as a hybrid system: explicit cognitive state a
 - [x] Add typed hypotheses, evidence-linked claims, and contradiction-preserving comparison.
 - [x] Add temporal video metadata and event-timeline primitives.
 - [x] Add global-workspace Pareto selection for competing specialist outputs.
-- [x] Add owner-authorised memory proposal/promotion contract (process-local prototype only).
+- [x] Add owner-authorised memory proposal/promotion contract.
+- [x] Add encrypted SQLite memory-record store using AES-256-GCM and an external key-provider interface.
+- [x] Add key-version rotation and ciphertext integrity tests.
 - [x] Add forecast resolution and Brier-score calibration primitives.
 - [x] Add loopback-default OpenAI-compatible inference client and structured hypothesis generation.
-- [x] Add GitHub Actions test workflow.
-- [ ] Implement encrypted persistent memory, owner key lifecycle, backup, and recovery.
-- [ ] Implement a durable cognitive-state store and temporal knowledge graph.
+- [x] Add GitHub Actions matrix and static checks.
+- [ ] Implement production Android Keystore/HSM-backed key provider and owner recovery.
+- [ ] Implement encrypted backup/restore and deletion lifecycle.
+- [ ] Implement durable cognitive-state orchestration and temporal knowledge graph.
 - [ ] Add multimodal video decoding, frame/event extraction, and temporal retrieval.
 - [ ] Add model-provider evaluation, red-team benchmarks, and calibration datasets.
 - [ ] Build the owner-bound Android application and device enrolment.
@@ -56,16 +59,18 @@ pytest
 
 The package makes no inference request automatically. The OpenAI-compatible adapter defaults to `http://127.0.0.1:3001/v1`; remote endpoints are rejected unless explicitly opted in, configured for HTTPS, and supplied an API key. Review [INFERENCE_BOUNDARY.md](docs/INFERENCE_BOUNDARY.md) before connecting any provider.
 
+The encrypted memory store requires an externally supplied 32-byte data key. Do not use a source-code constant or a plaintext environment variable as the production key source. The repository does not yet provide Android Keystore, HSM, or owner-recovery integration. Review [MEMORY_AND_METACOGNITION.md](docs/MEMORY_AND_METACOGNITION.md).
+
 ## Repository map
 
-- `src/jegpant/` — evidence, claim, hypothesis, video, memory, workspace, metacognition, and inference primitives.
-- `tests/` — executable behavioural and integrity tests.
+- `src/jegpant/` — evidence, claims, hypotheses, video, memory, encrypted storage, workspace, metacognition, and inference primitives.
+- `tests/` — executable behavioural, integrity, and encryption tests.
 - `docs/PRODUCT_CHARTER.md` — product definition and non-goals.
 - `docs/COGNITIVE_ARCHITECTURE.md` — cognitive processes, state, specialist roles, and memory lifecycle.
 - `docs/SYSTEM_ARCHITECTURE.md` — deployment boundaries and data flow.
 - `docs/OWNER_SECURITY_MODEL.md` — owner identity, device trust, keys, and recovery.
 - `docs/VIDEO_EVIDENCE_PIPELINE.md` — asynchronous video ingestion and evidence traceability.
-- `docs/MEMORY_AND_METACOGNITION.md` — memory promotion and outcome-based confidence calibration.
+- `docs/MEMORY_AND_METACOGNITION.md` — encrypted memory prototype, memory promotion, key rotation, and calibration.
 - `docs/INFERENCE_BOUNDARY.md` — model-provider boundary and privacy controls.
 - `docs/RESEARCH_AND_EVALUATION.md` — research standards and validation programme.
 - `docs/100_MIND_RESEARCH_ROSTER.md` — provisional research roster, with Patrick Jane at #100.
