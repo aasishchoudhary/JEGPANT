@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from jegpant.ach import ACHRating
+from jegpant.ach import ACHEvidence
 from jegpant.ach_auditor import ACHAuditor, ACHReviewError
 from jegpant.inference import ChatResponse
 from jegpant.models import Hypothesis
@@ -50,9 +50,7 @@ def test_ach_auditor_validates_complete_matrix_and_calls_comparator():
         Hypothesis("h2", "A mechanical fault moved the door."),
     )
     evidence = (
-        __import__("jegpant.ach", fromlist=["ACHEvidence"]).ACHEvidence(
-            "e1", "cam-1", "cam-1", 3, "Door visibly moved at 00:01:10."
-        ),
+        ACHEvidence("e1", "cam-1", "cam-1", 3, "Door visibly moved at 00:01:10."),
     )
 
     result = auditor.review(hypotheses=hypotheses, evidence=evidence)
@@ -71,8 +69,6 @@ def test_ach_auditor_rejects_missing_matrix_cells():
     payload["judgements"] = payload["judgements"][:1]
     auditor = ACHAuditor(QueueClient([payload]))
     hypotheses = (Hypothesis("h1", "A"), Hypothesis("h2", "B"))
-    from jegpant.ach import ACHEvidence
-
     evidence = (ACHEvidence("e1", "s1", "s1", 2, "An event."),)
     with pytest.raises(ACHReviewError, match="matrix incomplete"):
         auditor.review(hypotheses=hypotheses, evidence=evidence)
