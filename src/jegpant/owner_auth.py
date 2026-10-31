@@ -286,7 +286,7 @@ class OwnerAuthorizationService:
         signature = _decode_signature(signature_b64)
         try:
             self._owner_key.verify(signature, payload)
-        except InvalidSignature:
+        except (InvalidSignature, ValueError):
             raise OwnerAuthorizationError("owner signature verification failed") from None
 
     @_synchronized
@@ -323,7 +323,7 @@ class OwnerAuthorizationService:
         try:
             device_device_proof = _decode_signature(enrollment.device_proof_b64)
             device_public_key.verify(device_device_proof, payload)
-        except InvalidSignature:
+        except (InvalidSignature, ValueError):
             raise OwnerAuthorizationError("device key possession proof failed") from None
 
         record = DeviceRecord(
@@ -385,7 +385,7 @@ class OwnerAuthorizationService:
                 _decode_signature(request.signature_b64),
                 request_signing_bytes(request),
             )
-        except InvalidSignature:
+        except (InvalidSignature, ValueError):
             raise OwnerAuthorizationError("device request signature is invalid") from None
 
         result = self.state_store.authorize_request(
