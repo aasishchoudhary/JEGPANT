@@ -10,7 +10,7 @@ import struct
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import AsyncIterable, Protocol
 from uuid import UUID, uuid4
 
 from cryptography.exceptions import InvalidTag
@@ -270,6 +270,159 @@ class EncryptedMediaVault:
             asset_id=asset_id,
             size_bytes=size_bytes,
             sha256=source_digest,
+            key_version=self.current_key_version,
+            chunk_size=self.chunk_size,
+            chunk_count=chunk_count,
+        )
+
+    async def encrypt_stream(
+        self,
+        chunks: AsyncIterable[bytes],
+        *,
+        asset_id: str,
+        expected_size_bytes: int,
+        expected_sha256: str,
+    ) -> MediaVaultEntry:
+        """Encrypt a streamed upload without creating a plaintext staging file.
+
+        The expected size and digest are part of the authenticated header.
+        Actual bytes are checked against both before the encrypted asset is
+        published as complete. The caller should sign the expected digest in
+        its device request before starting the upload.
+        """
+        destination = self._asset_path(asset_id)
+        if destination.exists():
+            raise FileExistsError("asset ID already exists in the media vault")
+        if (
+            isinstance(expected_size_bytes, bool)
+            or not isinstance(expected_size_bytes, int)
+            or expected_size_bytes <= 0
+            or expected_size_bytes > self.max_asset_bytes
+        ):
+            raise MediaVaultError("expected upload size is invalid or exceeds the limit")
+        if (
+            not isinstance(expected_sha256, str)
+            or len(expected_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in expected_sha256)
+        ):
+            raise MediaVaultError("expected SHA-256 must be a lowercase hexadecimal digest")
+
+        chunk_count = (
+            expected_size_bytes + self.chunk_size - 1
+        ) // self.chunk_size
+        if chunk_count > self.MAX_CHUNKS:
+            raise MediaVaultError("upload requires too many encryption chunks")
+
+        nonce_base_value = int.from_bytes(os.urandom(self.NONCE_BYTES), "big")
+        while nonce_base_value + chunk_count >= 1 << 96:
+            nonce_base_value = int.from_bytes(os.urandom(self.NONCE_BYTES), "big")
+        nonce_base = nonce_base_value.to_bytes(self.NONCE_BYTES, "big")
+        header = {
+            "schema_version": self.SCHEMA_VERSION,
+            "instance_id": self.instance_id,
+            "asset_id": asset_id,
+            "key_version": self.current_key_version,
+            "size_bytes": expected_size_bytes,
+            "sha256": expected_sha256,
+            "chunk_size": self.chunk_size,
+            "chunk_count": chunk_count,
+            "nonce_base": base64.b64encode(nonce_base).decode("ascii"),
+        }
+        header_bytes = self._canonical_json(header)
+        if len(header_bytes) > self.HEADER_MAX_BYTES:
+            raise MediaVaultError("media header exceeded its size limit")
+        header_digest = hashlib.sha256(header_bytes).digest()
+        cipher = AESGCM(self._key(self.current_key_version))
+        source_digest = hashlib.sha256()
+        received = 0
+        chunks_written = 0
+        buffer = bytearray()
+        created = False
+
+        try:
+            with destination.open("xb") as output_stream:
+                created = True
+                output_stream.write(self.MAGIC)
+                output_stream.write(struct.pack(">I", len(header_bytes)))
+                output_stream.write(header_bytes)
+
+                async for part in chunks:
+                    if not isinstance(part, bytes):
+                        raise MediaVaultError("upload stream yielded a non-byte chunk")
+                    if not part:
+                        continue
+                    received += len(part)
+                    if received > expected_size_bytes:
+                        raise MediaVaultError("upload exceeds its signed content length")
+
+                    source_digest.update(part)
+                    view = memoryview(part)
+                    offset = 0
+                    while offset < len(view):
+                        needed = self.chunk_size - len(buffer)
+                        take = min(needed, len(view) - offset)
+                        buffer.extend(view[offset:offset + take])
+                        offset += take
+                        if len(buffer) == self.chunk_size:
+                            encrypted = cipher.encrypt(
+                                self._nonce(nonce_base, chunks_written),
+                                bytes(buffer),
+                                self._aad(header_digest, chunks_written, b"data"),
+                            )
+                            output_stream.write(encrypted)
+                            chunks_written += 1
+                            buffer.clear()
+
+                if received != expected_size_bytes:
+                    raise MediaVaultError("upload ended before its signed content length")
+                actual_digest = source_digest.hexdigest()
+                if actual_digest != expected_sha256:
+                    raise MediaVaultIntegrityError("upload SHA-256 did not match signed digest")
+
+                if buffer:
+                    encrypted = cipher.encrypt(
+                        self._nonce(nonce_base, chunks_written),
+                        bytes(buffer),
+                        self._aad(header_digest, chunks_written, b"data"),
+                    )
+                    output_stream.write(encrypted)
+                    chunks_written += 1
+                    buffer.clear()
+
+                if chunks_written != chunk_count:
+                    raise MediaVaultIntegrityError("encrypted chunk count is inconsistent")
+
+                final_manifest = {
+                    "complete": True,
+                    "asset_id": asset_id,
+                    "size_bytes": received,
+                    "sha256": actual_digest,
+                    "chunk_count": chunks_written,
+                }
+                final_plaintext = self._canonical_json(final_manifest)
+                output_stream.write(
+                    cipher.encrypt(
+                        self._nonce(nonce_base, chunks_written),
+                        final_plaintext,
+                        self._aad(header_digest, chunks_written, b"final"),
+                    )
+                )
+                output_stream.flush()
+                os.fsync(output_stream.fileno())
+
+            try:
+                os.chmod(destination, 0o600)
+            except OSError:
+                pass
+        except Exception:
+            if created:
+                destination.unlink(missing_ok=True)
+            raise
+
+        return MediaVaultEntry(
+            asset_id=asset_id,
+            size_bytes=received,
+            sha256=expected_sha256,
             key_version=self.current_key_version,
             chunk_size=self.chunk_size,
             chunk_count=chunk_count,
