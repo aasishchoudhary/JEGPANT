@@ -116,7 +116,9 @@ class MemoryPromotionService:
                 raise ValueError(
                     "proposal ID already identifies a different durable memory record"
                 )
-            return existing
+            raise ValueError(
+                "memory record already exists; use retrieve() with read_memory permission"
+            )
 
         if not self.verifier.verify(approval):
             raise PermissionError("owner approval verification failed")
