@@ -26,9 +26,10 @@ The implementation is being built as a hybrid system: explicit cognitive state a
 - [x] Define asynchronous post-hoc video evidence pipeline.
 - [x] Add local video hashing and bounded ffprobe metadata intake.
 - [x] Add append-only evidence ledger with hash-chain verification.
-- [x] Add typed hypotheses, evidence-linked claims, and contradiction-preserving comparison.
+- [x] Add typed hypotheses, evidence-linked claims, contradiction-preserving comparison, and ACH triage.
 - [x] Add temporal video metadata and event-timeline primitives.
 - [x] Add global-workspace Pareto selection for competing specialist outputs.
+- [x] Add Analysis of Competing Hypotheses with source-independence grouping.
 - [x] Add owner-authorised memory proposal/promotion contract.
 - [x] Add encrypted SQLite memory-record store using AES-256-GCM and an external key-provider interface.
 - [x] Add key-version rotation and ciphertext integrity tests.
@@ -67,7 +68,7 @@ The video intake helper only hashes and probes metadata. It does not decode fram
 
 ## Repository map
 
-- `src/jegpant/` — evidence, claims, hypotheses, video, media intake, memory, encrypted storage, workspace, metacognition, and inference primitives.
+- `src/jegpant/` — evidence, claims, hypotheses, ACH, video, media intake, memory, encrypted storage, workspace, metacognition, and inference primitives.
 - `tests/` — executable behavioural, integrity, encryption, and media-intake tests.
 - `docs/PRODUCT_CHARTER.md` — product definition and non-goals.
 - `docs/COGNITIVE_ARCHITECTURE.md` — cognitive processes, state, specialist roles, and memory lifecycle.
@@ -77,6 +78,7 @@ The video intake helper only hashes and probes metadata. It does not decode fram
 - `docs/MEMORY_AND_METACOGNITION.md` — encrypted memory prototype, memory promotion, key rotation, and calibration.
 - `docs/INFERENCE_BOUNDARY.md` — model-provider boundary and privacy controls.
 - `docs/RESEARCH_AND_EVALUATION.md` — research standards and validation programme.
+- `docs/ACH_ENGINE.md` — contradiction-focused hypothesis comparison and evaluation plan.
 - `docs/100_MIND_RESEARCH_ROSTER.md` — provisional research roster, with Patrick Jane at #100.
 - `docs/CAPABILITY_EXTRACTION_MATRIX_01_20.md` — research-to-engineering mapping for the first 20 candidates.
 
