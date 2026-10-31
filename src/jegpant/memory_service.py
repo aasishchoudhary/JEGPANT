@@ -88,6 +88,20 @@ class MemoryPromotionService:
                     "owner approval verifier and device authorization must share "
                     "the same persistent state store"
                 )
+        verifier_fingerprint = getattr(verifier, "owner_key_fingerprint", None)
+        authorization_fingerprint = getattr(
+            authorization_service, "owner_key_fingerprint", None
+        )
+        if (
+            verifier_fingerprint is None
+            or authorization_fingerprint is None
+            or verifier_fingerprint != authorization_fingerprint
+            or getattr(verifier, "owner_key_algorithm", None)
+            != authorization_service.owner_key_algorithm
+        ):
+            raise ValueError(
+                "memory approval and device authorization must use the same owner identity"
+            )
         self.instance_id = instance_id
         self.verifier = verifier
         self.authorization_service = authorization_service
