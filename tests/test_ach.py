@@ -19,7 +19,7 @@ def hypotheses():
 def evidence():
     return (
         ACHEvidence("e1", "camera-a", "camera-a", 3, "Door handle visibly turns."),
-        ACHEvidence("e2", "camera-b", "same-camera-system", 2, "Second view shows movement."),
+        ACHEvidence("e2", "camera-b", "camera-a", 2, "Second view shows movement."),
         ACHEvidence("e3", "maintenance-log", "maintenance-log", 3, "Door closer was faulty."),
     )
 
@@ -42,6 +42,7 @@ def test_contradiction_focused_ach_comparison():
     assert by_id["h1"].contradiction_score == 18
     assert by_id["h2"].contradiction_score == 6
     assert by_id["h1"].strong_contradictions == ("e3",)
+    assert [item.hypothesis_id for item in result.results] == ["h2", "h1"]
     assert "not a probability" in result.warning
 
 
@@ -54,7 +55,7 @@ def test_correlated_sources_are_not_double_counted():
             ACHJudgement("h1", "e2", ACHRating.STRONGLY_INCONSISTENT, 3),
         ),
     )
-    # Both reports are from the same independence group; max contribution is 18, not 30.
+    # Both reports share an independence group; only the strongest contributes.
     assert result.results[0].contradiction_score == 18
     assert set(result.results[0].contradictions) == {"e1", "e2"}
 
@@ -69,7 +70,7 @@ def test_unassessed_and_missing_evidence_remain_visible():
         ),
     )
     item = result.results[0]
-    assert item.unassessed_evidence == ("e1", "e3",)
+    assert item.unassessed_evidence == ("e1", "e3")
     assert item.neutral_evidence == ("e2",)
 
 
