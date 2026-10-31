@@ -73,9 +73,13 @@ class MemoryPromotionService:
         verifier_state_store = getattr(verifier, "state_store", None)
         authorization_state_store = authorization_service.state_store
         if verifier_state_store is not None and verifier_state_store is not authorization_state_store:
+            verifier_database = getattr(verifier_state_store, "database_path", None)
+            authorization_database = getattr(
+                authorization_state_store, "database_path", None
+            )
             same_database = (
-                getattr(verifier_state_store, "database_path", None)
-                == getattr(authorization_state_store, "database_path", None)
+                verifier_database is not None
+                and verifier_database == authorization_database
                 and getattr(verifier_state_store, "instance_id", None)
                 == getattr(authorization_state_store, "instance_id", None)
             )
