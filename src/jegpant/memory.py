@@ -8,7 +8,7 @@ backup, deletion, and recovery controls behind this interface.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Protocol
 from uuid import uuid4
@@ -119,7 +119,7 @@ class MemoryCatalog:
             provenance_refs=proposal.provenance_refs,
             sensitivity=proposal.sensitivity,
             context_tags=proposal.context_tags,
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
             owner_approval_id=approval.approval_id,
         )
         self._records[record.memory_id] = record
