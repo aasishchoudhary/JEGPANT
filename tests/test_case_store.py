@@ -232,3 +232,88 @@ def test_missing_case_is_rejected(tmp_path):
     with open_store(tmp_path / "cases.sqlite") as store:
         with pytest.raises(KeyError):
             store.list_evidence(str(uuid4()))
+
+
+
+def test_media_asset_metadata_is_encrypted_and_persisted(tmp_path):
+    from types import SimpleNamespace
+
+    path = tmp_path / "cases.sqlite"
+    entry = SimpleNamespace(
+        asset_id=str(uuid4()),
+        size_bytes=123456,
+        sha256="ab" * 32,
+        key_version=1,
+        chunk_size=65536,
+        chunk_count=2,
+    )
+    with open_store(path) as store:
+        case_id = store.create_case()
+        store.add_media_asset(case_id, entry)
+        assets = store.list_media_assets(case_id)
+        assert len(assets) == 1
+        assert assets[0]["asset_id"] == entry.asset_id
+        assert assets[0]["sha256"] == entry.sha256
+
+    raw = path.read_bytes()
+    assert entry.asset_id.encode() not in raw
+    assert entry.sha256.encode() not in raw
+
+    with open_store(path) as reopened:
+        assert reopened.media_asset_exists(case_id, entry.asset_id)
+        assert reopened.list_media_assets(case_id)[0]["asset_id"] == entry.asset_id
+
+
+def test_media_asset_metadata_rejects_duplicate_and_unknown_case(tmp_path):
+    from types import SimpleNamespace
+
+    entry = SimpleNamespace(
+        asset_id=str(uuid4()),
+        size_bytes=999,
+        sha256="cd" * 32,
+        key_version=1,
+        chunk_size=65536,
+        chunk_count=1,
+    )
+    with open_store(tmp_path / "cases.sqlite") as store:
+        with pytest.raises(KeyError):
+            store.add_media_asset(str(uuid4()), entry)
+
+        case_id = store.create_case()
+        store.add_media_asset(case_id, entry)
+        with pytest.raises(ValueError, match="already exists"):
+            store.add_media_asset(case_id, entry)
+
+
+def test_media_metadata_ciphertext_tampering_is_detected(tmp_path):
+    from types import SimpleNamespace
+
+    path = tmp_path / "cases.sqlite"
+    entry = SimpleNamespace(
+        asset_id=str(uuid4()),
+        size_bytes=999,
+        sha256="ef" * 32,
+        key_version=1,
+        chunk_size=65536,
+        chunk_count=1,
+    )
+    with open_store(path) as store:
+        case_id = store.create_case()
+        store.add_media_asset(case_id, entry)
+
+    with sqlite3.connect(path) as connection:
+        ciphertext = bytearray(
+            connection.execute(
+                "SELECT ciphertext FROM case_media_assets WHERE case_id = ?",
+                (case_id,),
+            ).fetchone()[0]
+        )
+        ciphertext[-1] ^= 0x01
+        connection.execute(
+            "UPDATE case_media_assets SET ciphertext = ? WHERE case_id = ?",
+            (bytes(ciphertext), case_id),
+        )
+
+    with open_store(path) as store:
+        with pytest.raises(CaseIntegrityError, match="authentication"):
+            store.list_media_assets(case_id)
