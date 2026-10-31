@@ -143,15 +143,15 @@ class ACHAuditor:
             diagnosticity = raw.get("diagnosticity")
             rationale = raw.get("rationale")
 
-            if hypothesis_id not in hypothesis_ids:
+            if not isinstance(hypothesis_id, str) or hypothesis_id not in hypothesis_ids:
                 raise ACHReviewError("ACH response contains an unknown hypothesis ID")
-            if evidence_id not in evidence_ids:
+            if not isinstance(evidence_id, str) or evidence_id not in evidence_ids:
                 raise ACHReviewError("ACH response contains an unknown evidence ID")
             pair = (hypothesis_id, evidence_id)
             if pair in seen:
                 raise ACHReviewError("ACH response contains a duplicate matrix cell")
             seen.add(pair)
-            if rating_value not in allowed_ratings:
+            if not isinstance(rating_value, str) or rating_value not in allowed_ratings:
                 raise ACHReviewError("ACH response contains an unsupported rating")
             if isinstance(diagnosticity, bool) or diagnosticity not in (1, 2, 3):
                 raise ACHReviewError("diagnosticity must be an integer from 1 to 3")
