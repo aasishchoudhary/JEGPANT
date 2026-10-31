@@ -269,7 +269,6 @@ def test_async_stream_upload_rejects_short_and_long_uploads(tmp_path):
         )
     assert not vault._asset_path(short_id).exists()
 
-    long_data = b"this is longer than expected"
     with pytest.raises(MediaVaultError, match="exceeds"):
         asyncio.run(
             vault.encrypt_stream(
