@@ -29,6 +29,7 @@ from jegpant.owner_auth import (
     owner_approval_signing_bytes,
     request_signing_bytes,
 )
+from jegpant.owner_state_store import InMemoryOwnerStateStore
 
 
 INSTANCE_ID = str(uuid4())
@@ -80,15 +81,18 @@ def setup_security(instance_id=INSTANCE_ID):
         device_proof_b64=base64.b64encode(device_key.sign(payload)).decode(),
     )
 
+    state_store = InMemoryOwnerStateStore(instance_id)
     authorization_service = OwnerAuthorizationService(
         instance_id=instance_id,
         owner_public_key=public_bytes(owner_key),
+        state_store=state_store,
     )
     authorization_service.enroll_device(enrollment)
     verifier = Ed25519ApprovalVerifier(
         instance_id=instance_id,
         owner_public_key=public_bytes(owner_key),
         key_id="owner-key-v1",
+        state_store=state_store,
     )
     return authorization_service, verifier, owner_key, device_key, device_id
 
@@ -319,15 +323,18 @@ def test_device_with_only_propose_scope_cannot_retrieve_memory(tmp_path):
         owner_signature_b64=base64.b64encode(owner_key.sign(payload)).decode(),
         device_proof_b64=base64.b64encode(device_key.sign(payload)).decode(),
     )
+    state_store = InMemoryOwnerStateStore(INSTANCE_ID)
     authorization_service = OwnerAuthorizationService(
         instance_id=INSTANCE_ID,
         owner_public_key=public_bytes(owner_key),
+        state_store=state_store,
     )
     authorization_service.enroll_device(enrollment)
     verifier = Ed25519ApprovalVerifier(
         instance_id=INSTANCE_ID,
         owner_public_key=public_bytes(owner_key),
         key_id="owner-key-v1",
+        state_store=state_store,
     )
     proposal = make_proposal()
 
