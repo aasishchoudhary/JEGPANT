@@ -37,7 +37,7 @@ class ChatMessage:
         if self.role not in {"system", "user", "assistant"}:
             raise ValueError("role must be system, user, or assistant")
         if not isinstance(self.content, str):
-            raise ValueError("message content must be a string")
+            raise TypeError("message content must be a string")
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,7 +91,7 @@ class OpenAICompatibleClient:
         self._opener = build_opener(ProxyHandler({}), _NoRedirectHandler())
 
     @classmethod
-    def from_environment(cls) -> "OpenAICompatibleClient":
+    def from_environment(cls) -> OpenAICompatibleClient:
         """Load configuration without printing or logging credentials."""
         allow_remote = os.getenv("JEGPANT_ALLOW_REMOTE_INFERENCE", "").lower() == "true"
         return cls(
