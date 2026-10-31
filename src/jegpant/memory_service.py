@@ -1,7 +1,8 @@
-"""Bridge owner-approved memory proposals into encrypted durable storage."""
+"""Owner/device-authorized promotion and retrieval for encrypted memory."""
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from uuid import UUID, uuid5
 
@@ -12,15 +13,45 @@ from .memory import (
     MemoryRecord,
     SignedOwnerApproval,
 )
+from .owner_auth import OwnerAuthorizationService, SignedDeviceRequest
+
+
+def promotion_request_body(
+    proposal: MemoryProposal, approval: SignedOwnerApproval
+) -> bytes:
+    """Canonical request body a device must sign for memory promotion."""
+    return json.dumps(
+        {
+            "operation": "promote_memory",
+            "proposal_id": proposal.proposal_id,
+            "kind": proposal.kind.value,
+            "summary": proposal.summary,
+            "provenance_refs": list(proposal.provenance_refs),
+            "sensitivity": proposal.sensitivity.value,
+            "context_tags": list(proposal.context_tags),
+            "approval_id": approval.approval_id,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def retrieval_request_body(proposal_id: str) -> bytes:
+    """Canonical request body a device must sign for memory retrieval."""
+    return json.dumps(
+        {"operation": "retrieve_memory", "proposal_id": proposal_id},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
 
 
 class MemoryPromotionService:
-    """Promote an explicitly approved proposal into the encrypted memory store.
+    """Owner-approved persistent memory service with device access controls.
 
-    Proposal content is supplied at promotion time. The owner approval binds
-    the proposal ID and instance ID. The record ID is deterministic per
-    instance/proposal, preventing accidental duplicate promotion across
-    process restarts. This does not persist unapproved proposals.
+    Durable records are encrypted in SQLite. Each operation also requires a
+    device-signed request checked by OwnerAuthorizationService. The caller must
+    sign the exact request body returned by the helper functions in this module.
     """
 
     def __init__(
@@ -28,6 +59,7 @@ class MemoryPromotionService:
         *,
         instance_id: str,
         verifier: ApprovalVerifier,
+        authorization_service: OwnerAuthorizationService,
         store: EncryptedMemoryStore,
     ) -> None:
         try:
@@ -36,8 +68,11 @@ class MemoryPromotionService:
             raise ValueError("instance_id must be a UUID") from exc
         if store.instance_id != instance_id:
             raise ValueError("memory store belongs to a different instance")
+        if authorization_service.instance_id != instance_id:
+            raise ValueError("authorization service belongs to a different instance")
         self.instance_id = instance_id
         self.verifier = verifier
+        self.authorization_service = authorization_service
         self.store = store
 
     def _memory_id(self, proposal_id: str) -> str:
@@ -49,12 +84,20 @@ class MemoryPromotionService:
         self,
         proposal: MemoryProposal,
         approval: SignedOwnerApproval,
+        request: SignedDeviceRequest,
     ) -> MemoryRecord:
-        """Verify one-time owner approval and persist the encrypted record."""
+        """Verify device access and owner approval before durable promotion."""
         if approval.instance_id != self.instance_id:
             raise PermissionError("approval belongs to a different cognitive instance")
         if approval.proposal_id != proposal.proposal_id:
             raise PermissionError("approval belongs to a different memory proposal")
+
+        request_body = promotion_request_body(proposal, approval)
+        self.authorization_service.verify_request(
+            request,
+            body=request_body,
+            required_scope="propose_memory",
+        )
 
         memory_id = self._memory_id(proposal.proposal_id)
         try:
@@ -93,6 +136,16 @@ class MemoryPromotionService:
         self.store.put(record)
         return record
 
-    def retrieve(self, proposal_id: str) -> MemoryRecord:
-        """Retrieve and authenticate a memory record by proposal ID."""
+    def retrieve(
+        self,
+        proposal_id: str,
+        request: SignedDeviceRequest,
+    ) -> MemoryRecord:
+        """Retrieve one encrypted memory after checking enrolled-device scope."""
+        request_body = retrieval_request_body(proposal_id)
+        self.authorization_service.verify_request(
+            request,
+            body=request_body,
+            required_scope="read_memory",
+        )
         return self.store.get(self._memory_id(proposal_id))
