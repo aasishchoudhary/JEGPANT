@@ -346,6 +346,22 @@ class OwnerAuthorizationService:
         body: bytes,
         required_scope: str,
     ) -> DeviceRecord:
+        """Verify a request when its complete body is already in memory."""
+        return self.verify_request_digest(
+            request,
+            body_sha256=hashlib.sha256(body).hexdigest(),
+            required_scope=required_scope,
+        )
+
+    @_synchronized
+    def verify_request_digest(
+        self,
+        request: SignedDeviceRequest,
+        *,
+        body_sha256: str,
+        required_scope: str,
+    ) -> DeviceRecord:
+        """Verify a signed content digest without buffering a large request body."""
         if request.instance_id != self.instance_id:
             raise OwnerAuthorizationError("request belongs to a different instance")
         if request.method != request.method.upper() or not request.method:
@@ -371,9 +387,12 @@ class OwnerAuthorizationService:
             raise OwnerAuthorizationError(
                 "request is expired or outside its time window"
             )
-
-        actual_digest = hashlib.sha256(body).hexdigest()
-        if actual_digest != request.body_sha256:
+        if (
+            not isinstance(body_sha256, str)
+            or len(body_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in body_sha256)
+            or body_sha256 != request.body_sha256
+        ):
             raise OwnerAuthorizationError("request body digest mismatch")
 
         device = self.state_store.get_device(request.device_id)
