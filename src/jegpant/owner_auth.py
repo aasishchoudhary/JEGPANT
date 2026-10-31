@@ -11,6 +11,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from functools import wraps
+from threading import RLock
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Callable
@@ -20,6 +22,17 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from .memory import SignedOwnerApproval
+
+
+def _synchronized(method):
+    """Serialize state-changing operations on one verifier instance."""
+
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapped
 
 
 ALLOWED_DEVICE_SCOPES = frozenset(
@@ -215,6 +228,7 @@ class OwnerAuthorizationService:
         self._clock = clock or (lambda: datetime.now(UTC))
         self.max_request_ttl_seconds = max_request_ttl_seconds
         self.max_enrollment_ttl_seconds = max_enrollment_ttl_seconds
+        self._lock = RLock()
         self._devices: dict[str, DeviceRecord] = {}
         self._enrollment_ids: set[str] = set()
         self._request_ids: set[str] = set()
@@ -227,6 +241,7 @@ class OwnerAuthorizationService:
         except InvalidSignature:
             raise OwnerAuthorizationError("owner signature verification failed") from None
 
+    @_synchronized
     def enroll_device(self, enrollment: DeviceEnrollment) -> DeviceRecord:
         if enrollment.instance_id != self.instance_id:
             raise OwnerAuthorizationError("enrolment belongs to a different instance")
@@ -276,6 +291,7 @@ class OwnerAuthorizationService:
         self._enrollment_ids.add(enrollment.enrollment_id)
         return record
 
+    @_synchronized
     def verify_request(
         self,
         request: SignedDeviceRequest,
@@ -331,6 +347,7 @@ class OwnerAuthorizationService:
         self._request_ids.add(request.request_id)
         return device
 
+    @_synchronized
     def revoke_device(self, revocation: SignedDeviceRevocation) -> DeviceRecord:
         if revocation.instance_id != self.instance_id:
             raise OwnerAuthorizationError("revocation belongs to a different instance")
@@ -366,6 +383,7 @@ class OwnerAuthorizationService:
         self._revocation_ids.add(revocation.revocation_id)
         return revoked
 
+    @_synchronized
     def get_device(self, device_id: str) -> DeviceRecord | None:
         return self._devices.get(device_id)
 
@@ -393,8 +411,10 @@ class Ed25519ApprovalVerifier:
         self.key_id = key_id
         self._clock = clock or (lambda: datetime.now(UTC))
         self.max_approval_ttl_seconds = max_approval_ttl_seconds
+        self._lock = RLock()
         self._used_approval_ids: set[str] = set()
 
+    @_synchronized
     def verify(self, approval: SignedOwnerApproval) -> bool:
         if (
             approval.instance_id != self.instance_id
