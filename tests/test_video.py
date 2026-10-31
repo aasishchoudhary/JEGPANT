@@ -1,6 +1,6 @@
-import pytest
-
 from jegpant.video import TimelineEvent, VideoMetadata, VideoTimeline
+
+import pytest
 
 
 HASH = "a" * 64
