@@ -129,7 +129,13 @@ def make_signed_headers(
     }
 
 
-def setup_api(tmp_path, *, scopes=None, max_body_bytes=1024 * 1024):
+def setup_api(
+    tmp_path,
+    *,
+    scopes=None,
+    max_body_bytes=1024 * 1024,
+    max_media_upload_bytes=8 * 1024 * 1024 * 1024,
+):
     owner_key = Ed25519PrivateKey.generate()
     device_key = Ed25519PrivateKey.generate()
     device_id = str(uuid4())
@@ -190,7 +196,10 @@ def setup_api(tmp_path, *, scopes=None, max_body_bytes=1024 * 1024):
         cases=cases,
         jobs=jobs,
         media_vault=media_vault,
-        config=PrivateAPIConfig(max_json_body_bytes=max_body_bytes),
+        config=PrivateAPIConfig(
+            max_json_body_bytes=max_body_bytes,
+            max_media_upload_bytes=max_media_upload_bytes,
+        ),
     )
     app.state.media_vault = media_vault
     return TestClient(app), owner_key, device_key, device_id, cases, jobs
@@ -501,7 +510,11 @@ def test_private_api_rejects_media_digest_mismatch_and_removes_partial_asset(tmp
 def test_private_api_requires_ingest_media_scope(tmp_path):
     scopes = (
         "create_case",
+        "write_evidence",
         "read_evidence",
+        "queue_analysis",
+        "read_jobs",
+        "read_reports",
     )
     client, owner_key, device_key, device_id, _, _ = setup_api(
         tmp_path, scopes=scopes
@@ -518,13 +531,29 @@ def test_private_api_requires_ingest_media_scope(tmp_path):
             body=b"{}",
         ),
     )
-    # The case creation should fail first because this device is deliberately unscoped.
-    assert case.status_code == 403
+    assert case.status_code == 201
+    case_id = case.json()["case_id"]
+    data = b"small media upload"
+    asset_id = str(uuid4())
+    path = f"/v1/cases/{case_id}/media/{asset_id}"
+    headers = make_signed_headers(
+        owner_key,
+        device_key,
+        device_id=device_id,
+        method="PUT",
+        path=path,
+        body=data,
+    )
+    headers["X-Jegpant-Content-Sha256"] = hashlib.sha256(data).hexdigest()
+    headers["X-Jegpant-Content-Length"] = str(len(data))
+
+    response = client.put(path, content=data, headers=headers)
+    assert response.status_code == 403
 
 
 def test_private_api_rejects_upload_length_over_limit(tmp_path):
     client, owner_key, device_key, device_id, _, _ = setup_api(
-        tmp_path, max_body_bytes=1024
+        tmp_path, max_body_bytes=1024, max_media_upload_bytes=1024
     )
     case = client.post(
         "/v1/cases",
@@ -539,7 +568,7 @@ def test_private_api_rejects_upload_length_over_limit(tmp_path):
         ),
     )
     case_id = case.json()["case_id"]
-    data = b"x" * (8 * 1024 * 1024 * 1024 + 1)
+    data = b"x" * 1025
     asset_id = str(uuid4())
     path = f"/v1/cases/{case_id}/media/{asset_id}"
     headers = make_signed_headers(
