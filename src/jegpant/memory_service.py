@@ -70,6 +70,20 @@ class MemoryPromotionService:
             raise ValueError("memory store belongs to a different instance")
         if authorization_service.instance_id != instance_id:
             raise ValueError("authorization service belongs to a different instance")
+        verifier_state_store = getattr(verifier, "state_store", None)
+        authorization_state_store = authorization_service.state_store
+        if verifier_state_store is not None and verifier_state_store is not authorization_state_store:
+            same_database = (
+                getattr(verifier_state_store, "database_path", None)
+                == getattr(authorization_state_store, "database_path", None)
+                and getattr(verifier_state_store, "instance_id", None)
+                == getattr(authorization_state_store, "instance_id", None)
+            )
+            if not same_database:
+                raise ValueError(
+                    "owner approval verifier and device authorization must share "
+                    "the same persistent state store"
+                )
         self.instance_id = instance_id
         self.verifier = verifier
         self.authorization_service = authorization_service
