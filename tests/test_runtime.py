@@ -143,7 +143,7 @@ def test_runtime_report_is_json_serialisable_and_preserves_limits():
     encoded = json.dumps(report)
     assert "analysis_complete_pending_review" in encoded
     assert "not probabilities" not in encoded.lower()
-    assert "not a probability" in report["limitations"][1] or report["ach_results"]
+    assert "not a probability" in report["ach_warning"]
     assert report["human_review_required"] is True
     assert len(report["ach_results"]) == 2
 
