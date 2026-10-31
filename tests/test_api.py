@@ -13,7 +13,6 @@ from jegpant.api import PrivateAPIConfig, create_app
 from jegpant.case_store import EncryptedCaseStore
 from jegpant.inference import ChatResponse
 from jegpant.job_queue import AnalysisJobQueue
-from jegpant.memory import MemoryKind
 from jegpant.owner_auth import (
     DeviceEnrollment,
     OwnerAuthorizationService,
@@ -304,10 +303,9 @@ def test_private_api_end_to_end_case_evidence_job_and_report(tmp_path):
 
 
 def test_private_api_denies_missing_and_invalid_device_signatures(tmp_path):
-    client, owner_key, device_key, device_id, cases, _ = setup_api(tmp_path)
+    client, owner_key, device_key, device_id, _, _ = setup_api(tmp_path)
     response = client.post("/v1/cases", content=b"{}")
     assert response.status_code == 401
-    assert cases.evidence_count(str(uuid4())) if False else True
 
     headers = make_signed_headers(
         owner_key,
