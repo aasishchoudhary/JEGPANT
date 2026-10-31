@@ -130,6 +130,20 @@ class EncryptedCaseStore:
                 CREATE INDEX IF NOT EXISTS idx_case_reports_order
                     ON case_reports(instance_id, case_id, created_at);
 
+                CREATE TABLE IF NOT EXISTS case_media_assets (
+                    instance_id TEXT NOT NULL,
+                    case_id TEXT NOT NULL,
+                    asset_key TEXT NOT NULL,
+                    key_version INTEGER NOT NULL,
+                    schema_version INTEGER NOT NULL,
+                    nonce BLOB NOT NULL,
+                    ciphertext BLOB NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (instance_id, case_id, asset_key),
+                    FOREIGN KEY (instance_id, case_id)
+                        REFERENCES cases(instance_id, case_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS case_job_results (
                     instance_id TEXT NOT NULL,
                     case_id TEXT NOT NULL,
@@ -338,6 +352,119 @@ class EncryptedCaseStore:
                 raise CaseIntegrityError("evidence lookup digest does not match payload")
             records.append(item)
         return tuple(records)
+
+    def add_media_asset(self, case_id: str, entry) -> None:
+        """Bind an already-encrypted vault asset to one case namespace."""
+        try:
+            UUID(entry.asset_id)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ValueError("media asset entry must contain a valid UUID") from exc
+        if (
+            isinstance(entry.size_bytes, bool)
+            or not isinstance(entry.size_bytes, int)
+            or entry.size_bytes <= 0
+            or not isinstance(entry.sha256, str)
+            or len(entry.sha256) != 64
+        ):
+            raise ValueError("media asset metadata is invalid")
+        try:
+            int(entry.sha256, 16)
+        except ValueError as exc:
+            raise ValueError("media asset digest must be hexadecimal") from exc
+
+        asset_key = self._lookup_digest("media", entry.asset_id)
+        payload = {
+            "asset_id": entry.asset_id,
+            "size_bytes": entry.size_bytes,
+            "sha256": entry.sha256,
+            "key_version": entry.key_version,
+            "chunk_size": entry.chunk_size,
+            "chunk_count": entry.chunk_count,
+        }
+        key_version, nonce, ciphertext = self._seal(
+            "media_metadata", f"{case_id}:{asset_key}", payload
+        )
+        from datetime import UTC, datetime
+
+        try:
+            with closing(self._connect()) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                if connection.execute(
+                    "SELECT 1 FROM cases WHERE instance_id = ? AND case_id = ?",
+                    (self.instance_id, case_id),
+                ).fetchone() is None:
+                    connection.rollback()
+                    raise KeyError(case_id)
+                connection.execute(
+                    """
+                    INSERT INTO case_media_assets(
+                        instance_id, case_id, asset_key, key_version,
+                        schema_version, nonce, ciphertext, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        self.instance_id,
+                        case_id,
+                        asset_key,
+                        key_version,
+                        self.SCHEMA_VERSION,
+                        nonce,
+                        ciphertext,
+                        datetime.now(UTC).isoformat(),
+                    ),
+                )
+                connection.commit()
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("media asset already exists in this case") from exc
+
+    def list_media_assets(self, case_id: str) -> tuple[dict[str, Any], ...]:
+        """Return authenticated metadata for the encrypted media assets in a case."""
+        with closing(self._connect()) as connection:
+            if connection.execute(
+                "SELECT 1 FROM cases WHERE instance_id = ? AND case_id = ?",
+                (self.instance_id, case_id),
+            ).fetchone() is None:
+                raise KeyError(case_id)
+            rows = connection.execute(
+                """
+                SELECT asset_key, key_version, schema_version, nonce, ciphertext
+                FROM case_media_assets
+                WHERE instance_id = ? AND case_id = ?
+                ORDER BY created_at, asset_key
+                """,
+                (self.instance_id, case_id),
+            ).fetchall()
+
+        result: list[dict[str, Any]] = []
+        for asset_key, key_version, schema_version, nonce, ciphertext in rows:
+            payload = self._open(
+                entity_type="media_metadata",
+                entity_id=f"{case_id}:{asset_key}",
+                key_version=key_version,
+                schema_version=schema_version,
+                nonce=bytes(nonce),
+                ciphertext=bytes(ciphertext),
+            )
+            asset_id = payload.get("asset_id")
+            if (
+                not isinstance(asset_id, str)
+                or self._lookup_digest("media", asset_id) != asset_key
+            ):
+                raise CaseIntegrityError("media asset lookup digest does not match payload")
+            result.append(payload)
+        return tuple(result)
+
+    def media_asset_exists(self, case_id: str, asset_id: str) -> bool:
+        asset_key = self._lookup_digest("media", asset_id)
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM case_media_assets
+                WHERE instance_id = ? AND case_id = ? AND asset_key = ?
+                """,
+                (self.instance_id, case_id, asset_key),
+            ).fetchone()
+        return row is not None
 
     def store_result(
         self,
