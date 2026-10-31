@@ -52,6 +52,8 @@ def test_probe_hashes_file_and_extracts_metadata(tmp_path, monkeypatch):
     assert captured["kwargs"]["shell"] is False
     assert captured["kwargs"]["timeout"] == 30.0
     assert captured["command"][-1] == str(path.resolve())
+    assert captured["command"][captured["command"].index("-protocol_whitelist") + 1] == "file"
+    assert "-max_alloc" in captured["command"]
 
 
 def test_probe_rejects_file_over_size_limit(tmp_path):
@@ -99,6 +101,7 @@ def test_probe_rejects_timeout(tmp_path, monkeypatch):
 
     path = tmp_path / "slow.bin"
     path.write_bytes(b"video")
+
     def fake_run(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd="ffprobe", timeout=kwargs["timeout"])
 
@@ -150,3 +153,16 @@ def test_probe_does_not_expose_ffprobe_stderr(tmp_path, monkeypatch):
         probe_local_video(path, asset_id="asset-9")
 
     assert "private/users" not in str(error.value)
+
+
+def test_probe_rejects_oversized_metadata_output(tmp_path, monkeypatch):
+    path = tmp_path / "noisy.bin"
+    path.write_bytes(b"video")
+    monkeypatch.setattr(
+        "jegpant.media_intake.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0, stdout="x" * 100, stderr=""
+        ),
+    )
+    with pytest.raises(MediaIntakeError, match="output exceeded"):
+        probe_local_video(path, asset_id="asset-10", max_probe_output_bytes=10)
