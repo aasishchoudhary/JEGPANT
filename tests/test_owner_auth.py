@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import hashlib
 from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -391,7 +392,7 @@ def test_p256_owner_and_device_signatures_are_supported():
         path="/v1/evidence",
         issued_at=ISSUED,
         expires_at=EXPIRES,
-        body_sha256=__import__("hashlib").sha256(b"payload").hexdigest(),
+        body_sha256=hashlib.sha256(b"payload").hexdigest(),
         signature_b64="",
     )
     request = replace(
