@@ -63,6 +63,7 @@ class InvestigationResult:
     evidence_manifest_sha256: str
     hypotheses: tuple[Hypothesis, ...]
     ach_results: tuple[ACHHypothesisResult, ...]
+    ach_warning: str
     unresolved_questions: tuple[str, ...]
     review_notes: tuple[str, ...]
     model_ids: tuple[str, ...]
@@ -87,6 +88,7 @@ class InvestigationResult:
                 }
                 for item in self.hypotheses
             ],
+            "ach_warning": self.ach_warning,
             "ach_results": [
                 {
                     "hypothesis_id": item.hypothesis_id,
@@ -302,6 +304,7 @@ class CognitiveRuntime:
             evidence_manifest_sha256=self._manifest_digest(evidence),
             hypotheses=generated.hypotheses,
             ach_results=review.comparison.results,
+            ach_warning=review.comparison.warning,
             unresolved_questions=unique_questions,
             review_notes=review.review_notes,
             model_ids=tuple(dict.fromkeys((generated.model, review.model))),
