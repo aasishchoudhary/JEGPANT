@@ -6,7 +6,7 @@ JEGPANT is being developed as a persistent cognitive system, not a character sim
 
 The implementation is being built as a hybrid system: explicit cognitive state and typed evidence models, deterministic controls, specialist processors, and model-provider adapters. A language model is a reasoning component—not the identity, memory, policy engine, or complete mind.
 
-> **Development status:** foundation and prototype stage. The repository now contains an encrypted SQLite memory-record store with an external key-provider interface, Ed25519 owner/device authorization primitives, local video metadata intake, a deterministic epistemic core, a loopback-default inference adapter, a structured hypothesis generator, architecture specifications, and automated tests. It does not yet contain production owner key custody, durable cross-process replay protection, owner recovery, a deployed private backend, an Android application, a trained model, or validated psychological inference.
+> **Development status:** foundation and prototype stage. The repository now contains encrypted SQLite memory records, a transactional SQLite owner/device state store, Ed25519 owner/device authorization, local video metadata intake, ACH reasoning, a deterministic epistemic core, a loopback-default inference adapter, structured hypothesis generation, architecture specifications, and automated tests. It does not yet contain production hardware-backed owner key custody, owner recovery, a deployed private backend, an Android application, full video event extraction, a trained model, or validated psychological inference.
 
 ## Non-negotiable design principles
 
@@ -24,6 +24,7 @@ The implementation is being built as a hybrid system: explicit cognitive state a
 - [x] Establish project charter, cognitive architecture, and system boundaries.
 - [x] Define single-owner identity, device trust, recovery, and privacy model.
 - [x] Add Ed25519 owner-signed device enrolment, scoped signed requests, replay checks and device revocation primitives.
+- [x] Add transactional SQLite storage for device enrolment, revocation, request replay and owner-approval replay state.
 - [x] Define asynchronous post-hoc video evidence pipeline.
 - [x] Add local video hashing and bounded ffprobe metadata intake.
 - [x] Add append-only evidence ledger with hash-chain verification.
@@ -36,9 +37,9 @@ The implementation is being built as a hybrid system: explicit cognitive state a
 - [x] Add key-version rotation and ciphertext integrity tests.
 - [x] Add forecast resolution and Brier-score calibration primitives.
 - [x] Add loopback-default OpenAI-compatible inference client and structured hypothesis generation.
-- [x] Add GitHub Actions matrix, compile and Ruff checks (77 tests in the last verified run before the concurrency tests).
+- [x] Add GitHub Actions matrix, compile and Ruff checks (93 tests passed in the last completed full matrix before the newest memory-service integration test).
 - [ ] Implement production Android Keystore/HSM-backed key provider and owner recovery.
-- [ ] Move device registry and replay/approval state to a durable transactional store for multi-worker deployments.
+- [ ] Replace the single-host SQLite authorization store with a strongly consistent service/database if deployment spans multiple hosts or regions.
 - [ ] Implement encrypted media vault, upload workflow, and sandboxed media workers.
 - [ ] Implement encrypted backup/restore and deletion lifecycle.
 - [ ] Implement durable cognitive-state orchestration and temporal knowledge graph.
@@ -66,11 +67,13 @@ The package makes no inference request automatically. The OpenAI-compatible adap
 
 The encrypted memory store requires an externally supplied 32-byte data key. Do not use a source-code constant or a plaintext environment variable as the production key source. The repository does not yet provide Android Keystore, HSM, or owner-recovery integration. Review [MEMORY_AND_METACOGNITION.md](docs/MEMORY_AND_METACOGNITION.md).
 
+For persistent owner/device authorization, explicitly construct one `SQLiteOwnerStateStore` for the cognitive instance and pass it to both `OwnerAuthorizationService` and `Ed25519ApprovalVerifier`. The default in-memory store is only for tests/development. SQLite is currently single-host/local-filesystem, not a multi-region deployment solution. Review [OWNER_SECURITY_MODEL.md](docs/OWNER_SECURITY_MODEL.md).
+
 The video intake helper only hashes and probes metadata. It does not decode frames or analyse people. Production media parsing requires a hardened, unprivileged sandbox. Review [VIDEO_EVIDENCE_PIPELINE.md](docs/VIDEO_EVIDENCE_PIPELINE.md).
 
 ## Repository map
 
-- `src/jegpant/` — evidence, claims, hypotheses, ACH, video intake, owner authorization, memory, encrypted storage, workspace, metacognition, and inference primitives.
+- `src/jegpant/` — evidence, claims, hypotheses, ACH, video intake, owner authorization and state storage, memory promotion, encrypted storage, workspace, metacognition, and inference primitives.
 - `tests/` — executable behavioural, integrity, encryption, and media-intake tests.
 - `docs/PRODUCT_CHARTER.md` — product definition and non-goals.
 - `docs/COGNITIVE_ARCHITECTURE.md` — cognitive processes, state, specialist roles, and memory lifecycle.
