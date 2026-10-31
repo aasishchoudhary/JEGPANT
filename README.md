@@ -4,9 +4,9 @@
 
 JEGPANT is being developed as a persistent cognitive system, not a character simulator or a thin chat interface. Its purpose is to coordinate evidence-grounded perception, memory, hypothesis formation, adversarial testing, planning, and metacognitive review across sessions.
 
-The initial implementation is deliberately conservative: a deterministic Python core, explicit evidence provenance, and tests. Model providers, video models, Android interfaces, and private compute are adapters to be added behind stable boundaries—not trusted as the cognitive system itself.
+The implementation is being built as a hybrid system: explicit cognitive state and typed evidence models, deterministic controls, specialist processors, and model-provider adapters. A language model is a reasoning component—not the identity, memory, policy engine, or complete mind.
 
-> **Development status:** foundation stage. This repository currently contains architecture specifications and a small, testable epistemic core. It does not yet contain a trained model, autonomous agent, production security boundary, Android application, or validated psychological inference system.
+> **Development status:** foundation stage. The repository contains architecture specifications, a deterministic epistemic core, a loopback-default inference adapter, a structured hypothesis generator, and automated tests. It does not yet contain encrypted persistent memory, a production backend, an Android application, a trained model, or a validated psychological inference system.
 
 ## Non-negotiable design principles
 
@@ -21,16 +21,23 @@ The initial implementation is deliberately conservative: a deterministic Python 
 
 ## Current milestone
 
-- [x] Establish project charter and architectural boundaries.
-- [x] Define single-owner security and privacy model.
-- [x] Define evidence-first reasoning and post-hoc video analysis.
-- [x] Add a small deterministic evidence ledger and hypothesis comparison core.
-- [x] Add tests for ledger integrity and uncertainty-preserving comparisons.
-- [ ] Add persistent, encrypted memory storage with an independently reviewed key lifecycle.
-- [ ] Add model-provider interface and evaluation harness.
-- [ ] Add long-video indexing, temporal retrieval, and multimodal evidence adapters.
-- [ ] Add owner-bound Android client and device enrolment.
-- [ ] Complete threat-model review and deployment acceptance tests.
+- [x] Establish project charter, cognitive architecture, and system boundaries.
+- [x] Define single-owner identity, device trust, recovery, and privacy model.
+- [x] Define asynchronous post-hoc video evidence pipeline.
+- [x] Add append-only evidence ledger with hash-chain verification.
+- [x] Add typed hypotheses, evidence-linked claims, and contradiction-preserving comparison.
+- [x] Add temporal video metadata and event-timeline primitives.
+- [x] Add global-workspace Pareto selection for competing specialist outputs.
+- [x] Add owner-authorised memory proposal/promotion contract (process-local prototype only).
+- [x] Add forecast resolution and Brier-score calibration primitives.
+- [x] Add loopback-default OpenAI-compatible inference client and structured hypothesis generation.
+- [x] Add GitHub Actions test workflow.
+- [ ] Implement encrypted persistent memory, owner key lifecycle, backup, and recovery.
+- [ ] Implement a durable cognitive-state store and temporal knowledge graph.
+- [ ] Add multimodal video decoding, frame/event extraction, and temporal retrieval.
+- [ ] Add model-provider evaluation, red-team benchmarks, and calibration datasets.
+- [ ] Build the owner-bound Android application and device enrolment.
+- [ ] Complete independent security review and deployment acceptance tests.
 
 ## Quick start
 
@@ -41,25 +48,28 @@ python -m venv .venv
 # Linux/macOS
 source .venv/bin/activate
 # Windows PowerShell
-# .venv\Scripts\Activate.ps1
+# .venv\\Scripts\\Activate.ps1
 
 python -m pip install -e ".[dev]"
 pytest
 ```
 
-The core has no runtime network calls and does not send content to an AI provider.
+The package makes no inference request automatically. The OpenAI-compatible adapter defaults to `http://127.0.0.1:3001/v1`; remote endpoints are rejected unless explicitly opted in, configured for HTTPS, and supplied an API key. Review [INFERENCE_BOUNDARY.md](docs/INFERENCE_BOUNDARY.md) before connecting any provider.
 
 ## Repository map
 
-- `src/jegpant/` — deterministic cognitive/evidence primitives.
+- `src/jegpant/` — evidence, claim, hypothesis, video, memory, workspace, metacognition, and inference primitives.
 - `tests/` — executable behavioural and integrity tests.
 - `docs/PRODUCT_CHARTER.md` — product definition and non-goals.
-- `docs/COGNITIVE_ARCHITECTURE.md` — proposed cognitive mechanisms and state model.
+- `docs/COGNITIVE_ARCHITECTURE.md` — cognitive processes, state, specialist roles, and memory lifecycle.
 - `docs/SYSTEM_ARCHITECTURE.md` — deployment boundaries and data flow.
 - `docs/OWNER_SECURITY_MODEL.md` — owner identity, device trust, keys, and recovery.
 - `docs/VIDEO_EVIDENCE_PIPELINE.md` — asynchronous video ingestion and evidence traceability.
-- `docs/RESEARCH_AND_EVALUATION.md` — evidence standards and validation programme.
-- `docs/100_MIND_RESEARCH_ROSTER.md` — provisional research roster; not a scientific ranking.
+- `docs/MEMORY_AND_METACOGNITION.md` — memory promotion and outcome-based confidence calibration.
+- `docs/INFERENCE_BOUNDARY.md` — model-provider boundary and privacy controls.
+- `docs/RESEARCH_AND_EVALUATION.md` — research standards and validation programme.
+- `docs/100_MIND_RESEARCH_ROSTER.md` — provisional research roster, with Patrick Jane at #100.
+- `docs/CAPABILITY_EXTRACTION_MATRIX_01_20.md` — research-to-engineering mapping for the first 20 candidates.
 
 ## Public-repository warning
 
