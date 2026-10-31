@@ -10,8 +10,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+from functools import wraps
+from threading import RLock
 from typing import Protocol
 from uuid import uuid4
+
+
+def _synchronized(method):
+    """Serialize memory catalogue state changes within this process."""
+
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapped
 
 
 class MemoryKind(StrEnum):
@@ -83,10 +96,12 @@ class MemoryCatalog:
         if not instance_id.strip():
             raise ValueError("instance_id must not be empty")
         self.instance_id = instance_id
+        self._lock = RLock()
         self._verifier = verifier
         self._proposals: dict[str, MemoryProposal] = {}
         self._records: dict[str, MemoryRecord] = {}
 
+    @_synchronized
     def propose(self, proposal: MemoryProposal) -> None:
         if proposal.proposal_id in self._proposals:
             raise ValueError("proposal_id already exists")
@@ -94,6 +109,7 @@ class MemoryCatalog:
             raise ValueError("proposal has already been promoted")
         self._proposals[proposal.proposal_id] = proposal
 
+    @_synchronized
     def promote(
         self, proposal_id: str, approval: SignedOwnerApproval
     ) -> MemoryRecord:
@@ -125,5 +141,6 @@ class MemoryCatalog:
         self._records[record.memory_id] = record
         return record
 
+    @_synchronized
     def records(self) -> tuple[MemoryRecord, ...]:
         return tuple(self._records.values())
