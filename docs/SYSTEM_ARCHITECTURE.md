@@ -19,6 +19,10 @@ Android owner app
            |
   owner authorization service
            |
+  transactional owner-state store
+  (device keys/scopes, enrolments,
+   replay IDs, revocations, approvals)
+           |
   JEGPANT cognitive runtime
   ├─ cycle coordinator
   ├─ global workspace
@@ -35,6 +39,14 @@ Android owner app
   ├─ evidence ledger and manifests
   └─ encrypted backups
 ```
+
+## Owner authorization state
+
+The repository includes `SQLiteOwnerStateStore` for a single cognitive instance. It persists enrolled-device public keys and scopes, consumed enrolment IDs, signed-request IDs, device revocations, and consumed owner-approval IDs. The store uses SQLite write transactions and unique constraints so multiple service instances on the same host share one replay/revocation boundary.
+
+The application must create the state store with the instance UUID and inject the same store into both `OwnerAuthorizationService` and `Ed25519ApprovalVerifier`. The memory promotion service checks that these authorization components share the same store or the same SQLite database path. In-memory state is reserved for tests and development.
+
+This SQLite design is explicitly limited to a single host and a local filesystem. It is not a distributed database, multi-region consistency layer, or protection against restoration of an old database snapshot. A multi-host deployment requires a strongly consistent transactional store with equivalent atomic scope/revocation checks and uniqueness semantics. Expired replay rows also need a controlled retention/compaction policy.
 
 ## Trust boundaries
 
