@@ -13,6 +13,7 @@ from jegpant.api import PrivateAPIConfig, create_app
 from jegpant.case_store import EncryptedCaseStore
 from jegpant.inference import ChatResponse
 from jegpant.job_queue import AnalysisJobQueue
+from jegpant.media_vault import EncryptedMediaVault
 from jegpant.owner_auth import (
     DeviceEnrollment,
     OwnerAuthorizationService,
@@ -152,6 +153,7 @@ def setup_api(tmp_path, *, scopes=None, max_body_bytes=1024 * 1024):
             "queue_analysis",
             "read_jobs",
             "read_reports",
+            "ingest_media",
         ),
         enrollment_id=str(uuid4()),
         issued_at=now.isoformat(),
@@ -177,12 +179,20 @@ def setup_api(tmp_path, *, scopes=None, max_body_bytes=1024 * 1024):
         instance_id=INSTANCE_ID,
         key_provider=FakeKeyProvider(),
     )
+    media_vault = EncryptedMediaVault(
+        tmp_path / "media-vault",
+        instance_id=INSTANCE_ID,
+        key_provider=FakeKeyProvider(),
+        chunk_size=64 * 1024,
+    )
     app = create_app(
         authorization=authorization,
         cases=cases,
         jobs=jobs,
+        media_vault=media_vault,
         config=PrivateAPIConfig(max_json_body_bytes=max_body_bytes),
     )
+    app.state.media_vault = media_vault
     return TestClient(app), owner_key, device_key, device_id, cases, jobs
 
 
@@ -390,4 +400,157 @@ def test_private_api_limits_json_body_size(tmp_path):
             body=body,
         ),
     )
+    assert response.status_code == 413
+
+
+
+def test_private_api_streams_media_to_encrypted_vault_and_lists_metadata(tmp_path):
+    client, owner_key, device_key, device_id, cases, _ = setup_api(tmp_path)
+    case_body = b"{}"
+    created = client.post(
+        "/v1/cases",
+        content=case_body,
+        headers=make_signed_headers(
+            owner_key,
+            device_key,
+            device_id=device_id,
+            method="POST",
+            path="/v1/cases",
+            body=case_body,
+        ),
+    )
+    case_id = created.json()["case_id"]
+
+    data = bytes(range(256)) * 1024
+    digest = hashlib.sha256(data).hexdigest()
+    asset_id = str(uuid4())
+    path = f"/v1/cases/{case_id}/media/{asset_id}"
+    headers = make_signed_headers(
+        owner_key,
+        device_key,
+        device_id=device_id,
+        method="PUT",
+        path=path,
+        body=data,
+    )
+    headers["X-Jegpant-Content-Sha256"] = digest
+    headers["X-Jegpant-Content-Length"] = str(len(data))
+
+    uploaded = client.put(path, content=data, headers=headers)
+    assert uploaded.status_code == 201
+    assert uploaded.json()["asset_id"] == asset_id
+    assert uploaded.json()["sha256"] == digest
+
+    encrypted_path = client.app.state.media_vault._asset_path(asset_id)
+    assert encrypted_path.exists()
+    assert data not in encrypted_path.read_bytes()
+
+    listed_path = f"/v1/cases/{case_id}/media"
+    listed = client.get(
+        listed_path,
+        headers=make_signed_headers(
+            owner_key,
+            device_key,
+            device_id=device_id,
+            method="GET",
+            path=listed_path,
+            body=b"",
+        ),
+    )
+    assert listed.status_code == 200
+    assert listed.json()["media_assets"][0]["asset_id"] == asset_id
+    assert cases.media_asset_exists(case_id, asset_id)
+
+
+def test_private_api_rejects_media_digest_mismatch_and_removes_partial_asset(tmp_path):
+    client, owner_key, device_key, device_id, cases, _ = setup_api(tmp_path)
+    created = client.post(
+        "/v1/cases",
+        content=b"{}",
+        headers=make_signed_headers(
+            owner_key,
+            device_key,
+            device_id=device_id,
+            method="POST",
+            path="/v1/cases",
+            body=b"{}",
+        ),
+    )
+    case_id = created.json()["case_id"]
+
+    data = b"payload whose signed digest will be wrong" * 1000
+    asset_id = str(uuid4())
+    path = f"/v1/cases/{case_id}/media/{asset_id}"
+    headers = make_signed_headers(
+        owner_key,
+        device_key,
+        device_id=device_id,
+        method="PUT",
+        path=path,
+        body=b"x" * len(data),
+    )
+    headers["X-Jegpant-Content-Sha256"] = hashlib.sha256(b"x" * len(data)).hexdigest()
+    headers["X-Jegpant-Content-Length"] = str(len(data))
+
+    response = client.put(path, content=data, headers=headers)
+    assert response.status_code == 400
+    assert not client.app.state.media_vault._asset_path(asset_id).exists()
+    assert not cases.media_asset_exists(case_id, asset_id)
+
+
+def test_private_api_requires_ingest_media_scope(tmp_path):
+    scopes = (
+        "create_case",
+        "read_evidence",
+    )
+    client, owner_key, device_key, device_id, _, _ = setup_api(
+        tmp_path, scopes=scopes
+    )
+    case = client.post(
+        "/v1/cases",
+        content=b"{}",
+        headers=make_signed_headers(
+            owner_key,
+            device_key,
+            device_id=device_id,
+            method="POST",
+            path="/v1/cases",
+            body=b"{}",
+        ),
+    )
+    # The case creation should fail first because this device is deliberately unscoped.
+    assert case.status_code == 403
+
+
+def test_private_api_rejects_upload_length_over_limit(tmp_path):
+    client, owner_key, device_key, device_id, _, _ = setup_api(
+        tmp_path, max_body_bytes=1024
+    )
+    case = client.post(
+        "/v1/cases",
+        content=b"{}",
+        headers=make_signed_headers(
+            owner_key,
+            device_key,
+            device_id=device_id,
+            method="POST",
+            path="/v1/cases",
+            body=b"{}",
+        ),
+    )
+    case_id = case.json()["case_id"]
+    data = b"x" * (8 * 1024 * 1024 * 1024 + 1)
+    asset_id = str(uuid4())
+    path = f"/v1/cases/{case_id}/media/{asset_id}"
+    headers = make_signed_headers(
+        owner_key,
+        device_key,
+        device_id=device_id,
+        method="PUT",
+        path=path,
+        body=data,
+    )
+    headers["X-Jegpant-Content-Sha256"] = hashlib.sha256(data).hexdigest()
+    headers["X-Jegpant-Content-Length"] = str(len(data))
+    response = client.put(path, content=data, headers=headers)
     assert response.status_code == 413
