@@ -13,7 +13,7 @@ The `MemoryCatalog` is the process-local proposal layer. A proposal can only be 
 
 `MemoryPromotionService` now connects that approval step to the encrypted SQLite store. An owner-approved proposal is materialised as a durable `MemoryRecord`; a deterministic record ID derived from instance ID and proposal ID makes promotion idempotent. Retrieval authenticates and decrypts the record. Reusing a proposal ID for different content is rejected.
 
-The current promoter does not persist unapproved proposals. It also does not yet implement owner-approved deletion, versioned supersession, semantic retrieval, or distributed locking across processes.
+The current promoter does not persist unapproved proposals. Promotion requires a device-signed request with `propose_memory` scope and a separate owner signature. Retrieval requires a different device-signed request with `read_memory` scope. The owner approval verifier and device authorization service must share the same state store so replay IDs are not tracked in separate namespaces. The promoter does not yet implement owner-approved deletion, versioned supersession, semantic retrieval, or distributed locking for the encrypted memory database.
 
 ## Encrypted persistent store prototype
 
@@ -28,7 +28,7 @@ Security properties:
 - A key-versioned rotation operation re-encrypts records transactionally.
 - SQLite `secure_delete` is enabled as a secondary storage hygiene control.
 - The memory promotion path verifies an owner signature before writing a durable record.
-- A second promotion of the same proposal and same content returns the existing record rather than duplicating it.
+- A repeated promotion does not return the existing plaintext record: it reports that the record already exists and requires a separate retrieval request with the `read_memory` scope. This prevents a device with only `propose_memory` permission from using an idempotent write response to read private memory.
 
 Critical limitations:
 - A key provider that returns a key from a plaintext environment variable, local file, or source code defeats the intended key-custody boundary.
@@ -36,7 +36,9 @@ Critical limitations:
 - Memory IDs and key/schema versions remain visible in SQLite metadata.
 - SQLite's secure-delete setting is not a universal forensic-erasure guarantee; backups, filesystem snapshots, flash wear-levelled blocks, crash dumps, and replicas require separate retention and destruction policies.
 - The present store has no semantic search/index, owner recovery, backup encryption protocol, server attestation, or Android Keystore adapter.
-- Promotion verifies approval before persistence, but a database failure after one-time approval consumes that approval; the owner must issue a fresh approval to retry.
+- Promotion verifies device authorization and owner approval before persistence, but a database failure after one-time approval consumes that approval; the owner must issue a fresh approval to retry.
+- Owner/device replay state can be stored in `SQLiteOwnerStateStore`, but this is a single-host local-filesystem prototype; multi-region deployments require a strongly consistent database.
+
 - This component has not received an independent security review and is not production-ready.
 
 The implementation uses the maintained PyCA `cryptography` AESGCM API. Its documentation explicitly warns that a nonce must never be reused with the same key: https://cryptography.io/en/latest/hazmat/primitives/aead/
