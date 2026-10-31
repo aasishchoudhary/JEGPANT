@@ -266,9 +266,9 @@ class OwnerAuthorizationService:
         try:
             UUID(instance_id)
             self._owner_public_key_bytes = owner_public_key
-            self._owner_key = load_public_key(owner_public_key, owner_key_algorithm)
+            load_public_key(owner_public_key, owner_key_algorithm)
         except (ValueError, TypeError) as exc:
-            raise ValueError("instance ID or owner Ed25519 public key is invalid") from exc
+            raise ValueError("instance ID or owner public key is invalid") from exc
         if max_request_ttl_seconds <= 0 or max_enrollment_ttl_seconds <= 0:
             raise ValueError("authorization TTL limits must be positive")
 
@@ -292,8 +292,7 @@ class OwnerAuthorizationService:
         signature = _decode_signature(signature_b64)
         try:
             verify_signature(
-                self._owner_key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-                if False else self._owner_public_key_bytes,
+                self._owner_public_key_bytes,
                 signature,
                 payload,
                 self.owner_key_algorithm,
@@ -492,7 +491,7 @@ class Ed25519ApprovalVerifier:
     ) -> None:
         try:
             self._owner_public_key_bytes = owner_public_key
-            self._owner_key = load_public_key(owner_public_key, owner_key_algorithm)
+            load_public_key(owner_public_key, owner_key_algorithm)
             UUID(instance_id)
         except (ValueError, TypeError) as exc:
             raise ValueError("instance ID or owner public key is invalid") from exc
