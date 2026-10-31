@@ -19,9 +19,9 @@ from typing import Callable, Protocol
 from uuid import UUID
 
 from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from .memory import SignedOwnerApproval
+from .signatures import ED25519, load_public_key, verify_signature
 
 
 def _synchronized(method):
@@ -68,6 +68,7 @@ class DeviceEnrollment:
     expires_at: str
     owner_signature_b64: str
     device_proof_b64: str
+    device_key_algorithm: str = ED25519
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +101,7 @@ class DeviceRecord:
     scopes: frozenset[str]
     enrolled_at: str
     revoked_at: str | None = None
+    key_algorithm: str = ED25519
 
 
 class OwnerStateStore(Protocol):
@@ -193,6 +195,7 @@ def enrollment_signing_bytes(enrollment: DeviceEnrollment) -> bytes:
             "instance_id": enrollment.instance_id,
             "device_id": enrollment.device_id,
             "device_public_key_b64": enrollment.device_public_key_b64,
+            "device_key_algorithm": enrollment.device_key_algorithm,
             "scopes": sorted(enrollment.scopes),
             "enrollment_id": enrollment.enrollment_id,
             "issued_at": enrollment.issued_at,
@@ -254,6 +257,7 @@ class OwnerAuthorizationService:
         *,
         instance_id: str,
         owner_public_key: bytes,
+        owner_key_algorithm: str = ED25519,
         clock: Callable[[], datetime] | None = None,
         max_request_ttl_seconds: int = 60,
         max_enrollment_ttl_seconds: int = 300,
@@ -261,7 +265,8 @@ class OwnerAuthorizationService:
     ) -> None:
         try:
             UUID(instance_id)
-            self._owner_key = Ed25519PublicKey.from_public_bytes(owner_public_key)
+            self._owner_public_key_bytes = owner_public_key
+            self._owner_key = load_public_key(owner_public_key, owner_key_algorithm)
         except (ValueError, TypeError) as exc:
             raise ValueError("instance ID or owner Ed25519 public key is invalid") from exc
         if max_request_ttl_seconds <= 0 or max_enrollment_ttl_seconds <= 0:
@@ -276,6 +281,7 @@ class OwnerAuthorizationService:
             raise ValueError("owner state store belongs to a different instance")
 
         self.instance_id = instance_id
+        self.owner_key_algorithm = owner_key_algorithm
         self._clock = clock or (lambda: datetime.now(UTC))
         self.max_request_ttl_seconds = max_request_ttl_seconds
         self.max_enrollment_ttl_seconds = max_enrollment_ttl_seconds
@@ -285,7 +291,13 @@ class OwnerAuthorizationService:
     def _verify_owner(self, payload: bytes, signature_b64: str) -> None:
         signature = _decode_signature(signature_b64)
         try:
-            self._owner_key.verify(signature, payload)
+            verify_signature(
+                self._owner_key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+                if False else self._owner_public_key_bytes,
+                signature,
+                payload,
+                self.owner_key_algorithm,
+            )
         except (InvalidSignature, ValueError):
             raise OwnerAuthorizationError("owner signature verification failed") from None
 
@@ -317,20 +329,23 @@ class OwnerAuthorizationService:
 
         public_key_bytes = _decode_signature(enrollment.device_public_key_b64)
         try:
-            device_public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes)
-        except ValueError:
-            raise OwnerAuthorizationError("device public key is invalid") from None
-        try:
+            load_public_key(public_key_bytes, enrollment.device_key_algorithm)
             device_device_proof = _decode_signature(enrollment.device_proof_b64)
-            device_public_key.verify(device_device_proof, payload)
+            verify_signature(
+                public_key_bytes,
+                device_device_proof,
+                payload,
+                enrollment.device_key_algorithm,
+            )
         except (InvalidSignature, ValueError):
-            raise OwnerAuthorizationError("device key possession proof failed") from None
+            raise OwnerAuthorizationError("device key or possession proof is invalid") from None
 
         record = DeviceRecord(
             device_id=enrollment.device_id,
             public_key=public_key_bytes,
             scopes=frozenset(enrollment.scopes),
             enrolled_at=self._clock().astimezone(UTC).isoformat(),
+            key_algorithm=enrollment.device_key_algorithm,
         )
         if not self.state_store.register_device(enrollment.enrollment_id, record):
             raise OwnerAuthorizationError(
@@ -400,9 +415,11 @@ class OwnerAuthorizationService:
             raise OwnerAuthorizationError("device is not enrolled or has been revoked")
 
         try:
-            Ed25519PublicKey.from_public_bytes(device.public_key).verify(
+            verify_signature(
+                device.public_key,
                 _decode_signature(request.signature_b64),
                 request_signing_bytes(request),
+                device.key_algorithm,
             )
         except (InvalidSignature, ValueError):
             raise OwnerAuthorizationError("device request signature is invalid") from None
@@ -468,12 +485,14 @@ class Ed25519ApprovalVerifier:
         instance_id: str,
         owner_public_key: bytes,
         key_id: str,
+        owner_key_algorithm: str = ED25519,
         clock: Callable[[], datetime] | None = None,
         max_approval_ttl_seconds: int = 300,
         state_store: OwnerStateStore | None = None,
     ) -> None:
         try:
-            self._owner_key = Ed25519PublicKey.from_public_bytes(owner_public_key)
+            self._owner_public_key_bytes = owner_public_key
+            self._owner_key = load_public_key(owner_public_key, owner_key_algorithm)
             UUID(instance_id)
         except (ValueError, TypeError) as exc:
             raise ValueError("instance ID or owner public key is invalid") from exc
@@ -488,6 +507,7 @@ class Ed25519ApprovalVerifier:
 
         self.instance_id = instance_id
         self.key_id = key_id
+        self.owner_key_algorithm = owner_key_algorithm
         self._clock = clock or (lambda: datetime.now(UTC))
         self.max_approval_ttl_seconds = max_approval_ttl_seconds
         self.state_store = state_store
@@ -509,8 +529,11 @@ class Ed25519ApprovalVerifier:
                 or (expires - now).total_seconds() > self.max_approval_ttl_seconds
             ):
                 return False
-            self._owner_key.verify(
-                approval.signature, owner_approval_signing_bytes(approval)
+            verify_signature(
+                self._owner_public_key_bytes,
+                approval.signature,
+                owner_approval_signing_bytes(approval),
+                self.owner_key_algorithm,
             )
         except (OwnerAuthorizationError, InvalidSignature, TypeError, ValueError):
             return False
