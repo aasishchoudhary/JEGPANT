@@ -209,3 +209,21 @@ def test_private_api_supports_owner_signed_device_revocation(tmp_path):
     assert response.status_code == 200
     assert response.json()["status"] == "revoked"
     assert authorization.get_device(enrollment.device_id).revoked_at is not None
+
+
+
+def test_health_identity_exposes_only_public_owner_fingerprint(tmp_path):
+    owner_key = ec.generate_private_key(ec.SECP256R1())
+    client, _ = build_app(
+        tmp_path,
+        der_public_bytes(owner_key),
+        owner_key_algorithm=ECDSA_P256,
+    )
+    response = client.get("/health/identity")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["instance_id"] == INSTANCE_ID
+    assert payload["owner_key_algorithm"] == ECDSA_P256
+    assert len(payload["owner_key_fingerprint_sha256"]) == 64
+    assert payload["supported_device_key_algorithms"] == ["ecdsa_p256", "ed25519"]
+    assert "private" not in payload
