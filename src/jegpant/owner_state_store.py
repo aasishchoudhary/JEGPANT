@@ -139,10 +139,18 @@ class SQLiteOwnerStateStore:
                     scopes_json TEXT NOT NULL,
                     enrolled_at TEXT NOT NULL,
                     revoked_at TEXT,
+                    key_algorithm TEXT NOT NULL DEFAULT 'ed25519',
                     PRIMARY KEY (instance_id, device_id)
                 )
                 """
             )
+            device_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(owner_devices)")
+            }
+            if "key_algorithm" not in device_columns:
+                connection.execute(
+                    "ALTER TABLE owner_devices ADD COLUMN key_algorithm TEXT NOT NULL DEFAULT 'ed25519'"
+                )
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS owner_enrollments (
@@ -197,8 +205,8 @@ class SQLiteOwnerStateStore:
                 connection.execute(
                     """
                     INSERT INTO owner_devices
-                    (instance_id, device_id, public_key, scopes_json, enrolled_at, revoked_at)
-                    VALUES (?, ?, ?, ?, ?, NULL)
+                    (instance_id, device_id, public_key, scopes_json, enrolled_at, revoked_at, key_algorithm)
+                    VALUES (?, ?, ?, ?, ?, NULL, ?)
                     """,
                     (
                         self.instance_id,
@@ -206,6 +214,7 @@ class SQLiteOwnerStateStore:
                         record.public_key,
                         json.dumps(sorted(record.scopes), separators=(",", ":")),
                         record.enrolled_at,
+                        record.key_algorithm,
                     ),
                 )
                 connection.commit()
@@ -217,7 +226,7 @@ class SQLiteOwnerStateStore:
         with closing(self._connect()) as connection:
             row = connection.execute(
                 """
-                SELECT device_id, public_key, scopes_json, enrolled_at, revoked_at
+                SELECT device_id, public_key, scopes_json, enrolled_at, revoked_at, key_algorithm
                 FROM owner_devices
                 WHERE instance_id = ? AND device_id = ?
                 """,
@@ -237,6 +246,7 @@ class SQLiteOwnerStateStore:
             scopes=frozenset(scopes),
             enrolled_at=row[3],
             revoked_at=row[4],
+            key_algorithm=row[5],
         )
 
     def authorize_request(
