@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import logging
 import signal
-import time
 from threading import Event
 
 from .inference import OpenAICompatibleClient
