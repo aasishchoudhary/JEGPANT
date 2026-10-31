@@ -265,10 +265,10 @@ class OwnerAuthorizationService:
     ) -> None:
         try:
             UUID(instance_id)
-            self._owner_public_key_bytes = owner_public_key
-            load_public_key(owner_public_key, owner_key_algorithm)
         except (ValueError, TypeError) as exc:
-            raise ValueError("instance ID or owner public key is invalid") from exc
+            raise ValueError("instance_id must be a UUID") from exc
+        self._owner_public_key_bytes = owner_public_key
+        load_public_key(owner_public_key, owner_key_algorithm)
         if max_request_ttl_seconds <= 0 or max_enrollment_ttl_seconds <= 0:
             raise ValueError("authorization TTL limits must be positive")
 
@@ -491,11 +491,11 @@ class Ed25519ApprovalVerifier:
         state_store: OwnerStateStore | None = None,
     ) -> None:
         try:
-            self._owner_public_key_bytes = owner_public_key
-            load_public_key(owner_public_key, owner_key_algorithm)
             UUID(instance_id)
         except (ValueError, TypeError) as exc:
-            raise ValueError("instance ID or owner public key is invalid") from exc
+            raise ValueError("instance_id must be a UUID") from exc
+        self._owner_public_key_bytes = owner_public_key
+        load_public_key(owner_public_key, owner_key_algorithm)
         if not key_id.strip() or max_approval_ttl_seconds <= 0:
             raise ValueError("key ID and positive approval TTL are required")
         if state_store is None:
