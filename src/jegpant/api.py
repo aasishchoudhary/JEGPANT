@@ -22,6 +22,7 @@ from .owner_auth import (
     SignedDeviceRequest,
 )
 from .runtime import InvestigationEvidence
+from .media_vault import EncryptedMediaVault, MediaVaultError, MediaVaultIntegrityError
 
 
 AUTH_HEADERS = {
@@ -38,6 +39,7 @@ AUTH_HEADERS = {
 @dataclass(frozen=True, slots=True)
 class PrivateAPIConfig:
     max_json_body_bytes: int = 1024 * 1024
+    max_media_upload_bytes: int = 8 * 1024 * 1024 * 1024
 
 
 def create_app(
@@ -45,15 +47,18 @@ def create_app(
     authorization: OwnerAuthorizationService,
     cases: EncryptedCaseStore,
     jobs: AnalysisJobQueue,
+    media_vault: EncryptedMediaVault | None = None,
     config: PrivateAPIConfig | None = None,
 ) -> FastAPI:
     """Build the owner-only API from already initialised security/storage services."""
     config = config or PrivateAPIConfig()
-    if config.max_json_body_bytes <= 0:
-        raise ValueError("max_json_body_bytes must be positive")
+    if config.max_json_body_bytes <= 0 or config.max_media_upload_bytes <= 0:
+        raise ValueError("API body size limits must be positive")
     instance_id = authorization.instance_id
     if cases.instance_id != instance_id or jobs.instance_id != instance_id:
         raise ValueError("API services must belong to the same cognitive instance")
+    if media_vault is not None and media_vault.instance_id != instance_id:
+        raise ValueError("media vault must belong to the same cognitive instance")
 
     app = FastAPI(
         title="JEGPANT Private Runtime",
@@ -100,6 +105,47 @@ def create_app(
                 authorization.verify_request,
                 signed,
                 body=body,
+                required_scope=required_scope,
+            )
+        except OwnerAuthorizationError:
+            raise HTTPException(
+                status_code=403,
+                detail="Device request is not authorised",
+            ) from None
+        except RuntimeError:
+            raise HTTPException(
+                status_code=503,
+                detail="Authorisation state is temporarily unavailable",
+            ) from None
+
+    async def authenticate_digest(
+        request: Request,
+        *,
+        body_sha256: str,
+        required_scope: str,
+    ) -> None:
+        values = {
+            name: request.headers.get(header)
+            for name, header in AUTH_HEADERS.items()
+        }
+        if any(value is None for value in values.values()):
+            raise HTTPException(status_code=401, detail="Device authentication required")
+        signed = SignedDeviceRequest(
+            instance_id=values["instance_id"] or "",
+            device_id=values["device_id"] or "",
+            request_id=values["request_id"] or "",
+            method=request.method,
+            path=request.url.path,
+            issued_at=values["issued_at"] or "",
+            expires_at=values["expires_at"] or "",
+            body_sha256=values["body_sha256"] or "",
+            signature_b64=values["signature"] or "",
+        )
+        try:
+            await run_in_threadpool(
+                authorization.verify_request_digest,
+                signed,
+                body_sha256=body_sha256,
                 required_scope=required_scope,
             )
         except OwnerAuthorizationError:
@@ -202,6 +248,86 @@ def create_app(
                 for item in items
             ],
         }
+
+    @app.put("/v1/cases/{case_id}/media/{asset_id}", status_code=201)
+    async def upload_media(case_id: str, asset_id: str, request: Request):
+        if media_vault is None:
+            raise HTTPException(status_code=503, detail="Media vault is not configured")
+        expected_sha256 = request.headers.get("x-jegpant-content-sha256", "")
+        expected_length = request.headers.get("x-jegpant-content-length", "")
+        try:
+            size_bytes = int(expected_length)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Signed media content length is required") from None
+        if size_bytes <= 0 or size_bytes > config.max_media_upload_bytes:
+            raise HTTPException(status_code=413, detail="Media upload exceeds the configured limit")
+        if (
+            len(expected_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in expected_sha256)
+        ):
+            raise HTTPException(status_code=400, detail="Media SHA-256 header is invalid")
+        await authenticate_digest(
+            request,
+            body_sha256=expected_sha256,
+            required_scope="ingest_media",
+        )
+        if not await run_in_threadpool(cases.case_exists, case_id):
+            raise HTTPException(status_code=404, detail="Case not found")
+
+        async def chunks():
+            received = 0
+            async for part in request.stream():
+                received += len(part)
+                if received > size_bytes:
+                    raise HTTPException(status_code=413, detail="Media upload exceeds signed length")
+                if part:
+                    yield part
+            if received != size_bytes:
+                raise HTTPException(status_code=400, detail="Media upload length does not match signature")
+
+        try:
+            entry = await media_vault.encrypt_stream(
+                chunks(),
+                asset_id=asset_id,
+                expected_size_bytes=size_bytes,
+                expected_sha256=expected_sha256,
+            )
+            await run_in_threadpool(cases.add_media_asset, case_id, entry)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Case not found") from None
+        except FileExistsError:
+            raise HTTPException(status_code=409, detail="Media asset already exists") from None
+        except MediaVaultIntegrityError:
+            raise HTTPException(status_code=400, detail="Media upload digest verification failed") from None
+        except (MediaVaultError, ValueError, OSError):
+            try:
+                await run_in_threadpool(media_vault.delete, asset_id)
+            except Exception:
+                pass
+            raise HTTPException(status_code=400, detail="Media upload could not be accepted") from None
+        except Exception:
+            try:
+                await run_in_threadpool(media_vault.delete, asset_id)
+            except Exception:
+                pass
+            raise HTTPException(status_code=500, detail="Media upload failed") from None
+
+        return {
+            "asset_id": entry.asset_id,
+            "size_bytes": entry.size_bytes,
+            "sha256": entry.sha256,
+            "status": "encrypted_and_stored",
+        }
+
+    @app.get("/v1/cases/{case_id}/media")
+    async def list_media(case_id: str, request: Request):
+        body = await read_body(request)
+        await authenticate(request, body=body, required_scope="read_evidence")
+        try:
+            items = await run_in_threadpool(cases.list_media_assets, case_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Case not found") from None
+        return {"case_id": case_id, "media_assets": list(items)}
 
     @app.post("/v1/cases/{case_id}/investigations", status_code=202)
     async def enqueue_investigation(case_id: str, request: Request):
