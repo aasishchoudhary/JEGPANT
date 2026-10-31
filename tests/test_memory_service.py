@@ -376,3 +376,23 @@ def test_memory_service_rejects_separate_process_local_replay_stores(tmp_path):
                 authorization_service=authorization_service,
                 store=store,
             )
+
+
+
+def test_memory_service_rejects_different_owner_keys_for_authorization_and_approval(tmp_path):
+    authorization_service, _, _, _, _ = setup_security()
+    other_owner = Ed25519PrivateKey.generate()
+    other_verifier = Ed25519ApprovalVerifier(
+        instance_id=INSTANCE_ID,
+        owner_public_key=public_bytes(other_owner),
+        key_id="owner-key-v1",
+        state_store=authorization_service.state_store,
+    )
+    with open_store(tmp_path / "memory.sqlite") as store:
+        with pytest.raises(ValueError, match="same owner identity"):
+            MemoryPromotionService(
+                instance_id=INSTANCE_ID,
+                verifier=other_verifier,
+                authorization_service=authorization_service,
+                store=store,
+            )
