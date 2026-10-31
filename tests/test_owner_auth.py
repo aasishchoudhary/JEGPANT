@@ -279,3 +279,60 @@ def test_request_signature_is_bound_to_path_and_method():
         service.verify_request(
             tampered, body=b"request-payload", required_scope="run_analysis"
         )
+
+
+
+def test_concurrent_replay_of_same_request_only_succeeds_once():
+    from concurrent.futures import ThreadPoolExecutor
+
+    owner_key = Ed25519PrivateKey.generate()
+    device_key = Ed25519PrivateKey.generate()
+    service = make_service(owner_key)
+    enrollment = make_enrollment(owner_key, device_key)
+    service.enroll_device(enrollment)
+    request = make_request(device_key, enrollment.device_id)
+
+    def attempt():
+        try:
+            service.verify_request(
+                request, body=b"request-payload", required_scope="run_analysis"
+            )
+            return "accepted"
+        except OwnerAuthorizationError:
+            return "rejected"
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        outcomes = list(pool.map(lambda _: attempt(), range(8)))
+
+    assert outcomes.count("accepted") == 1
+    assert outcomes.count("rejected") == 7
+
+
+def test_concurrent_replay_of_memory_approval_only_succeeds_once():
+    from concurrent.futures import ThreadPoolExecutor
+
+    owner_key = Ed25519PrivateKey.generate()
+    verifier = Ed25519ApprovalVerifier(
+        instance_id=INSTANCE_ID,
+        owner_public_key=public_bytes(owner_key),
+        key_id="owner-key-v1",
+        clock=lambda: NOW,
+    )
+    approval = SignedOwnerApproval(
+        instance_id=INSTANCE_ID,
+        proposal_id="proposal-1",
+        approval_id=str(uuid4()),
+        key_id="owner-key-v1",
+        expires_at="2026-10-31T12:02:00Z",
+        signature=b"",
+    )
+    approval = replace(
+        approval,
+        signature=owner_key.sign(owner_approval_signing_bytes(approval)),
+    )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        outcomes = list(pool.map(lambda _: verifier.verify(approval), range(8)))
+
+    assert outcomes.count(True) == 1
+    assert outcomes.count(False) == 7
