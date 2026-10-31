@@ -63,6 +63,8 @@ class ACHJudgement:
     def __post_init__(self) -> None:
         if not self.hypothesis_id.strip() or not self.evidence_id.strip():
             raise ValueError("hypothesis_id and evidence_id must not be empty")
+        if not isinstance(self.rating, ACHRating):
+            raise TypeError("rating must be an ACHRating value")
         if not 1 <= self.diagnosticity <= 3:
             raise ValueError("diagnosticity must be between 1 and 3")
 
