@@ -9,8 +9,58 @@ The requirement is implemented as an exclusive owner principal and an explicit d
 - A small, owner-authorised set of devices.
 - No registration, invitations, guests, tenants, shared accounts, or public API access.
 - Every protected request is authenticated and authorised.
-- Device revocation invalidates access and affected sessions.
+- Device revocation invalidates access at the authorization service.
 - The system does not expose memory to a model provider or operator by default.
+
+## Implemented prototype: Ed25519 owner/device verification
+
+`src/jegpant/owner_auth.py` now implements the first cryptographic protocol primitives:
+
+### Device enrolment
+
+An enrolment request binds:
+- the cognitive instance UUID;
+- device UUID and raw Ed25519 public key;
+- an allowlisted set of scopes;
+- a unique enrolment ID;
+- issue and expiry times.
+
+The owner signs the canonical enrolment payload. The device also signs the same payload to prove possession of the corresponding private key. The runtime stores only the public key, scopes and enrolment metadata.
+
+### Per-request authentication
+
+Each signed request binds:
+- instance ID and enrolled device ID;
+- a unique UUID request ID;
+- uppercase HTTP method and request path;
+- issue and expiry timestamps;
+- SHA-256 digest of the exact request body;
+- Ed25519 device signature.
+
+The verifier checks the instance, device status, scope, time window, body digest and signature, then records the request ID to reject replay. State-changing operations use an in-process lock so concurrent duplicate requests do not pass the same replay check simultaneously.
+
+### Owner-signed device revocation
+
+The owner signs a short-lived revocation payload. The verifier records the device as revoked and denies subsequent requests.
+
+### Owner-signed memory approval
+
+`Ed25519ApprovalVerifier` implements the `ApprovalVerifier` interface used by the memory catalog. The owner signature binds an approval to the instance, proposal, approval ID, key ID and expiry. Approval IDs are one-time within the running verifier process.
+
+### Important implementation boundary
+
+These are **tested protocol primitives, not a production authentication service**.
+
+Current limitations:
+- The enrolled-device registry, replay IDs and used approval IDs are process-local memory. A restart loses this state. Multiple server workers would not share it. Production must use a transactional durable store with atomic uniqueness constraints or equivalent distributed replay control.
+- The code has no HTTP API, session/token lifecycle, TLS termination, rate limiting, intrusion detection, security-event audit pipeline or production deployment.
+- There is no Android Keystore/StrongBox key-generation adapter, attestation workflow, device UI, backup/recovery protocol or key-rotation ceremony.
+- Ed25519 support is implemented in the Python verifier. Android hardware-backed support depends on the platform/provider and must be verified; do not assume a device can generate or use this key type in hardware.
+- Request paths are signed as supplied. A production gateway must define a single canonical request-target representation and ensure routing layers do not normalise a signed path into a different resource.
+- The request body is authenticated by digest, but headers, content type, host and transport metadata are not all included in the signed message. Production protocol versioning must specify all security-relevant fields.
+- Process-local locks prevent local thread races only. They do not provide cross-process or multi-region consistency.
+- Clock synchronisation and rollback handling require operational controls.
+- This implementation has not had an independent cryptographic or penetration-test review.
 
 ## Key hierarchy (target design)
 
@@ -24,7 +74,7 @@ Use separate cryptographic purposes and rotate keys independently:
 
 Do not write custom cryptography. Use reviewed platform and cryptographic libraries, with independent security review before production.
 
-## Device enrolment
+## Device enrolment flow
 
 1. First-run setup creates the owner identity and instance identifier.
 2. The owner verifies and records recovery material offline.
@@ -38,16 +88,9 @@ Biometric unlock may gate local key use, but biometrics are not the cryptographi
 
 ## Request authorisation
 
-Each request must bind:
-- instance identifier;
-- enrolled device identifier and key;
-- unique nonce or request identifier;
-- timestamp and short expiry;
-- HTTP method and canonical request target;
-- body digest;
-- requested capability/scope.
+The current verifier checks Ed25519 signatures, instance/device binding, short TTL, UUID replay IDs, body digest and scopes. A production service must additionally define canonical HTTP request signing, transport security, request-size limits, rate limiting, durable replay storage, audit events, session revocation and key rollover.
 
-The server validates signature, expiry, replay status, device revocation, instance binding, and permission before accessing protected resources. This follows the resource-focused, no-implicit-trust model in NIST SP 800-207: https://csrc.nist.gov/pubs/sp/800/207/final
+This follows the resource-focused, no-implicit-trust model in NIST SP 800-207: https://csrc.nist.gov/pubs/sp/800/207/final
 
 ## Server and operator access
 
@@ -72,14 +115,16 @@ Confidential computing is not automatically end-to-end encryption. It requires a
 ## Minimum acceptance tests
 
 - unknown device denied;
-- invalid signature denied;
-- replayed request denied;
-- expired request denied;
-- revoked device denied immediately;
+- invalid owner or device signature denied;
+- invalid request body digest denied;
+- replayed request denied, including concurrent duplicate attempts in one process;
+- expired/overlong request denied;
+- revoked device denied;
 - wrong instance ID denied;
-- guest/public registration absent;
-- no provider call when external inference is disabled;
-- copied database is unreadable without required keys;
+- unsupported scope denied;
+- owner approval replay denied;
+- copied database unreadable without required keys;
 - backups restore only with owner recovery;
 - model output cannot grant itself permissions;
-- destructive memory action requires explicit owner authorisation.
+- destructive memory action requires explicit owner authorisation;
+- replay/revocation state survives server restart and concurrent multi-worker access.
