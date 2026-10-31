@@ -184,7 +184,10 @@ class EncryptedMediaVault:
         if chunk_count > self.MAX_CHUNKS:
             raise MediaVaultError("source file requires too many encryption chunks")
 
-        nonce_base = os.urandom(self.NONCE_BYTES)
+        nonce_base_value = int.from_bytes(os.urandom(self.NONCE_BYTES), "big")
+        while nonce_base_value + chunk_count >= 1 << 96:
+            nonce_base_value = int.from_bytes(os.urandom(self.NONCE_BYTES), "big")
+        nonce_base = nonce_base_value.to_bytes(self.NONCE_BYTES, "big")
         header = {
             "schema_version": self.SCHEMA_VERSION,
             "instance_id": self.instance_id,
@@ -304,7 +307,7 @@ class EncryptedMediaVault:
             raise FileExistsError("destination already exists")
         target.parent.mkdir(parents=True, exist_ok=True)
 
-        header, header_digest, _ = self._read_header(encrypted_path)
+        header, header_digest, header_bytes = self._read_header(encrypted_path)
         required = {
             "schema_version",
             "instance_id",
@@ -361,7 +364,7 @@ class EncryptedMediaVault:
         expected_encrypted_size = (
             len(self.MAGIC)
             + 4
-            + len(self._canonical_json(header))
+            + len(header_bytes)
             + size_bytes
             + self.TAG_BYTES * (chunk_count + 1)
             + len(final_plaintext)
@@ -379,7 +382,7 @@ class EncryptedMediaVault:
 
         try:
             with encrypted_path.open("rb") as input_stream:
-                input_stream.seek(len(self.MAGIC) + 4 + len(self._canonical_json(header)))
+                input_stream.seek(len(self.MAGIC) + 4 + len(header_bytes))
                 file_descriptor, temp_name = tempfile.mkstemp(
                     prefix=f".{target.name}.",
                     suffix=".decrypting",
