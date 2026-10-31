@@ -1,0 +1,50 @@
+#!/usr/bin/env sh
+set -eu
+
+GRADLE_VERSION="9.6.0"
+EXPECTED_SHA256="bbaeb2fef8710818cf0e261201dab964c572f92b942812df0c3620d62a529a01"
+GRADLE_USER_HOME="${GRADLE_USER_HOME:-$HOME/.gradle}"
+DIST_ROOT="$GRADLE_USER_HOME/wrapper/dists/jegpant-gradle-$GRADLE_VERSION"
+DIST_DIR="$DIST_ROOT/gradle-$GRADLE_VERSION"
+ZIP_FILE="$DIST_ROOT/gradle-$GRADLE_VERSION-bin.zip"
+DIST_URL="https://services.gradle.org/distributions/gradle-$GRADLE_VERSION-bin.zip"
+
+if [ ! -x "$DIST_DIR/bin/gradle" ]; then
+    command -v curl >/dev/null 2>&1 || {
+        echo "curl is required to bootstrap Gradle." >&2
+        exit 1
+    }
+    command -v unzip >/dev/null 2>&1 || {
+        echo "unzip is required to bootstrap Gradle." >&2
+        exit 1
+    }
+
+    mkdir -p "$DIST_ROOT"
+    rm -rf "$DIST_DIR"
+    TEMP_ZIP="$ZIP_FILE.tmp.$$"
+    trap 'rm -f "$TEMP_ZIP"' EXIT HUP INT TERM
+
+    echo "Downloading Gradle $GRADLE_VERSION..."
+    curl --fail --location --silent --show-error "$DIST_URL" -o "$TEMP_ZIP"
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        ACTUAL_SHA256="$(sha256sum "$TEMP_ZIP" | awk '{print $1}')"
+    elif command -v shasum >/dev/null 2>&1; then
+        ACTUAL_SHA256="$(shasum -a 256 "$TEMP_ZIP" | awk '{print $1}')"
+    else
+        echo "sha256sum or shasum is required to verify Gradle." >&2
+        exit 1
+    fi
+
+    if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+        echo "Gradle distribution SHA-256 mismatch; refusing to execute it." >&2
+        exit 1
+    fi
+
+    mv "$TEMP_ZIP" "$ZIP_FILE"
+    unzip -q "$ZIP_FILE" -d "$DIST_ROOT"
+    rm -f "$ZIP_FILE"
+    trap - EXIT HUP INT TERM
+fi
+
+exec "$DIST_DIR/bin/gradle" "$@"
