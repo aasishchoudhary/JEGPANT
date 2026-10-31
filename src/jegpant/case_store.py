@@ -444,3 +444,14 @@ class EncryptedCaseStore:
         if not self.case_exists(case_id):
             raise KeyError(case_id)
         return self._counts("case_reports", case_id)
+
+
+    def close(self) -> None:
+        """No persistent connection is held; retained for context-manager symmetry."""
+        return None
+
+    def __enter__(self) -> "EncryptedCaseStore":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()
