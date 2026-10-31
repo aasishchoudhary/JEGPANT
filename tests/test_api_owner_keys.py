@@ -12,7 +12,6 @@ from fastapi.testclient import TestClient
 from jegpant.api import create_app
 from jegpant.case_store import EncryptedCaseStore
 from jegpant.job_queue import AnalysisJobQueue
-from jegpant.memory import SignedOwnerApproval
 from jegpant.owner_auth import (
     DeviceEnrollment,
     OwnerAuthorizationService,
