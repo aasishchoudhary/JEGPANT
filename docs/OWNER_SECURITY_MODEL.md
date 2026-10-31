@@ -37,7 +37,7 @@ Each signed request binds:
 - SHA-256 digest of the exact request body;
 - Ed25519 device signature.
 
-The verifier checks the instance, device status, scope, time window, body digest and signature, then records the request ID to reject replay. State-changing operations use an in-process lock so concurrent duplicate requests do not pass the same replay check simultaneously.
+The verifier checks the instance, device status, scope, time window, body digest and signature, then atomically checks active-device status and scope while consuming the request ID. The default in-memory store is for tests only. The `SQLiteOwnerStateStore` uses `BEGIN IMMEDIATE` transactions and unique constraints so two service instances on the same host cannot accept the same request ID concurrently. It also persists enrolments, revocations and owner-approval IDs across process restarts.
 
 ### Owner-signed device revocation
 
@@ -45,20 +45,22 @@ The owner signs a short-lived revocation payload. The verifier records the devic
 
 ### Owner-signed memory approval
 
-`Ed25519ApprovalVerifier` implements the `ApprovalVerifier` interface used by the memory catalog. The owner signature binds an approval to the instance, proposal, approval ID, key ID and expiry. Approval IDs are one-time within the running verifier process.
+`Ed25519ApprovalVerifier` implements the `ApprovalVerifier` interface used by the memory catalog. The owner signature binds an approval to the instance, proposal, approval ID, key ID and expiry. When backed by `SQLiteOwnerStateStore`, approval IDs are consumed once across restarts and workers. The device authorization service and approval verifier must share the same state store (or the same SQLite database path); `MemoryPromotionService` rejects separate process-local stores.
 
 ### Important implementation boundary
 
 These are **tested protocol primitives, not a production authentication service**.
 
 Current limitations:
-- The enrolled-device registry, replay IDs and used approval IDs are process-local memory. A restart loses this state. Multiple server workers would not share it. Production must use a transactional durable store with atomic uniqueness constraints or equivalent distributed replay control.
+- `InMemoryOwnerStateStore` remains the default when no store is supplied and is suitable only for tests/development. Production must explicitly inject `SQLiteOwnerStateStore` into both owner and device authorization components.
+- `SQLiteOwnerStateStore` is a single-host, local-filesystem prototype. Do not place it on an arbitrary network share or use it as a multi-region database. A horizontally scaled deployment needs a strongly consistent transactional store with equivalent uniqueness and atomic authorization semantics.
+- Expired request/approval rows currently accumulate; a retention and compaction job is still required. Do not delete replay records before their signed request/approval expiry.
 - The code has no HTTP API, session/token lifecycle, TLS termination, rate limiting, intrusion detection, security-event audit pipeline or production deployment.
 - There is no Android Keystore/StrongBox key-generation adapter, attestation workflow, device UI, backup/recovery protocol or key-rotation ceremony.
 - Ed25519 support is implemented in the Python verifier. Android hardware-backed support depends on the platform/provider and must be verified; do not assume a device can generate or use this key type in hardware.
 - Request paths are signed as supplied. A production gateway must define a single canonical request-target representation and ensure routing layers do not normalise a signed path into a different resource.
 - The request body is authenticated by digest, but headers, content type, host and transport metadata are not all included in the signed message. Production protocol versioning must specify all security-relevant fields.
-- Process-local locks prevent local thread races only. They do not provide cross-process or multi-region consistency.
+- SQLite transactions provide same-host cross-process arbitration for the configured database. They do not provide multi-region consistency or protect against rollback to an older database snapshot.
 - Clock synchronisation and rollback handling require operational controls.
 - This implementation has not had an independent cryptographic or penetration-test review.
 
