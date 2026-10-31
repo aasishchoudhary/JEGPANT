@@ -6,6 +6,7 @@ import hashlib
 import json
 import subprocess
 from dataclasses import dataclass
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
@@ -46,11 +47,13 @@ def probe_local_video(
     ffprobe_path: str = "ffprobe",
     timeout_seconds: float = 30.0,
     max_file_bytes: int = 2 * 1024 * 1024 * 1024,
+    max_probe_output_bytes: int = 8 * 1024 * 1024,
 ) -> MediaIntakeResult:
     """Hash and inspect a local video without invoking a shell.
 
-    This function does not decode frames or perform person recognition. The
-    subprocess should run with restricted OS permissions in production.
+    Network protocols are disabled for the probe. This does not replace OS
+    sandboxing: production workers must run unprivileged with read access only
+    to the staged asset and write access only to a dedicated scratch directory.
     """
     source = Path(path)
     if source.is_symlink():
@@ -61,10 +64,10 @@ def probe_local_video(
         raise ValueError("asset_id must not be empty")
     if not ffprobe_path.strip():
         raise ValueError("ffprobe_path must not be empty")
-    if timeout_seconds <= 0:
-        raise ValueError("timeout_seconds must be positive")
-    if max_file_bytes <= 0:
-        raise ValueError("max_file_bytes must be positive")
+    if not isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise ValueError("timeout_seconds must be finite and positive")
+    if max_file_bytes <= 0 or max_probe_output_bytes <= 0:
+        raise ValueError("size limits must be positive")
 
     try:
         resolved = source.resolve(strict=True)
@@ -87,6 +90,10 @@ def probe_local_video(
         ffprobe_path,
         "-v",
         "error",
+        "-protocol_whitelist",
+        "file",
+        "-max_alloc",
+        "67108864",
         "-show_entries",
         "format=duration:stream=index,codec_type,codec_name,width,height,avg_frame_rate,duration",
         "-of",
@@ -112,6 +119,8 @@ def probe_local_video(
     if completed.returncode != 0:
         # stderr may contain local paths and media metadata; do not expose it.
         raise MediaIntakeError("ffprobe could not inspect the media file")
+    if len(completed.stdout.encode("utf-8")) > max_probe_output_bytes:
+        raise MediaIntakeError("ffprobe output exceeded the configured size limit")
 
     try:
         payload: Any = json.loads(completed.stdout)
