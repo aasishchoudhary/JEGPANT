@@ -147,5 +147,5 @@ class AndroidKeystoreIdentity(private val context: Context) {
     fun ownerPublicKeyFingerprint(): String =
         java.security.MessageDigest.getInstance("SHA-256")
             .digest(ownerKey().publicKeyDer)
-            .joinToString("") { byte -> "%02x".format(byte) }
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 }
