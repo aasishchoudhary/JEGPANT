@@ -44,6 +44,11 @@ ALLOWED_DEVICE_SCOPES = frozenset(
         "run_analysis",
         "export_data",
         "manage_devices",
+        "create_case",
+        "write_evidence",
+        "queue_analysis",
+        "read_jobs",
+        "read_reports",
     }
 )
 
