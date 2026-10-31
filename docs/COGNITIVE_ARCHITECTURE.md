@@ -71,6 +71,7 @@ Initial specialist roles:
 - evidence and provenance auditor;
 - causal analyst;
 - hypothesis generator;
+- Analysis of Competing Hypotheses (ACH) auditor focused on diagnostic contradictions and source dependence;
 - adversarial reviewer / red team;
 - temporal and spatial analyst;
 - social-interaction analyst (strictly bounded to observable behaviour and contextual alternatives);
@@ -79,7 +80,7 @@ Initial specialist roles:
 - metacognitive evaluator;
 - safety and authorisation guard.
 
-Specialists may disagree. Their outputs remain inspectable and linked to the evidence and method used.
+Specialists may disagree. Their outputs remain inspectable and linked to the evidence and method used. The ACH auditor orders hypotheses by a contradiction-focused triage score; it does not produce probabilities or automatically select a true explanation.
 
 ### 5. World and self models
 
