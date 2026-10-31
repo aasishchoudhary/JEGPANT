@@ -282,6 +282,7 @@ class OwnerAuthorizationService:
 
         self.instance_id = instance_id
         self.owner_key_algorithm = owner_key_algorithm
+        self.owner_key_fingerprint = hashlib.sha256(owner_public_key).hexdigest()
         self._clock = clock or (lambda: datetime.now(UTC))
         self.max_request_ttl_seconds = max_request_ttl_seconds
         self.max_enrollment_ttl_seconds = max_enrollment_ttl_seconds
@@ -507,6 +508,7 @@ class Ed25519ApprovalVerifier:
         self.instance_id = instance_id
         self.key_id = key_id
         self.owner_key_algorithm = owner_key_algorithm
+        self.owner_key_fingerprint = hashlib.sha256(owner_public_key).hexdigest()
         self._clock = clock or (lambda: datetime.now(UTC))
         self.max_approval_ttl_seconds = max_approval_ttl_seconds
         self.state_store = state_store
