@@ -59,3 +59,40 @@ def test_event_outside_source_duration_is_rejected():
     )
     with pytest.raises(ValueError):
         timeline.add(event)
+
+
+def test_event_extraction_confidence_is_bounded():
+    valid = TimelineEvent(
+        "video-1", "entry", 100, 200, "Entry seen.", "detector", "v1",
+        extraction_confidence=0.72,
+    )
+    assert valid.extraction_confidence == 0.72
+
+    with pytest.raises(ValueError):
+        TimelineEvent(
+            "video-1", "entry", 100, 200, "Entry seen.", "detector", "v1",
+            extraction_confidence=1.2,
+        )
+
+
+def test_malformed_ffprobe_stream_objects_are_rejected():
+    with pytest.raises(TypeError):
+        VideoMetadata.from_ffprobe(
+            {"streams": ["not-a-stream-object"]},
+            asset_id="video-2",
+            source_sha256=HASH,
+        )
+
+
+def test_non_finite_frame_rate_is_not_accepted():
+    with pytest.raises(ValueError):
+        VideoMetadata(
+            asset_id="video-3",
+            duration_ms=1000,
+            width=10,
+            height=10,
+            video_codec="h264",
+            average_frame_rate=float("inf"),
+            has_audio=False,
+            source_sha256=HASH,
+        )
