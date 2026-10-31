@@ -174,20 +174,25 @@ class JegpantApiClient(
         deviceId: String,
         method: String,
         path: String,
-        requiredScope: String,
         payload: JSONObject
     ): JSONObject {
-        val body = payload.toString().toByteArray(Charsets.UTF_8)
+        val body = if (method == "GET") {
+            ByteArray(0)
+        } else {
+            payload.toString().toByteArray(Charsets.UTF_8)
+        }
         val digest = sha256(body)
         val headers = signedHeaders(method, path, instanceId, deviceId, digest)
         val connection = openConnection(baseUrl, path)
         try {
             connection.requestMethod = method
-            connection.doOutput = true
-            connection.setFixedLengthStreamingMode(body.size)
-            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            if (method != "GET") {
+                connection.doOutput = true
+                connection.setFixedLengthStreamingMode(body.size)
+                connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                connection.outputStream.use { it.write(body) }
+            }
             headers.forEach(connection::setRequestProperty)
-            connection.outputStream.use { it.write(body) }
             return JSONObject(String(readResponse(connection), Charsets.UTF_8))
         } finally {
             connection.disconnect()
@@ -220,7 +225,17 @@ class JegpantApiClient(
     }
 
     fun enrollDevice(baseUrl: String, instanceId: String, deviceId: String): JSONObject {
+        val serverIdentity = getServerIdentity(baseUrl)
+        require(serverIdentity.instanceId == instanceId) {
+            "Connected server belongs to a different cognitive instance"
+        }
+        require(serverIdentity.ownerKeyAlgorithm == API_KEY_ALGORITHM) {
+            "Server owner key algorithm is not compatible with this Android client"
+        }
         val owner = identity.ownerKey()
+        require(identity.ownerPublicKeyFingerprint() == serverIdentity.ownerKeyFingerprintSha256) {
+            "This phone's owner key does not match the owner key configured on the server"
+        }
         val device = identity.deviceKey()
         require(owner.algorithm == API_KEY_ALGORITHM && device.algorithm == API_KEY_ALGORITHM) {
             "Android device enrollment requires P-256 ECDSA keys"
@@ -286,7 +301,6 @@ class JegpantApiClient(
             deviceId,
             "POST",
             "/v1/cases",
-            "create_case",
             JSONObject()
         )
         return response.getString("case_id")
@@ -314,7 +328,6 @@ class JegpantApiClient(
             deviceId,
             "POST",
             path,
-            "write_evidence",
             body
         )
     }
@@ -334,7 +347,6 @@ class JegpantApiClient(
             deviceId,
             "POST",
             path,
-            "queue_analysis",
             JSONObject().put("goal", goal).put("max_attempts", 3)
         )
         return response.getString("job_id")
@@ -351,7 +363,6 @@ class JegpantApiClient(
         deviceId,
         "GET",
         "/v1/jobs/$jobId",
-        "read_jobs",
         JSONObject()
     )
 
@@ -367,7 +378,6 @@ class JegpantApiClient(
         deviceId,
         "GET",
         "/v1/cases/$caseId/reports/$investigationId",
-        "read_reports",
         JSONObject()
     )
 
