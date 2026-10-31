@@ -1,0 +1,15 @@
+{
+    email {$JEGPANT_TLS_EMAIL}
+    admin off
+}
+
+{$JEGPANT_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy api:8000
+    header {
+        -Server
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+        X-Frame-Options DENY
+    }
+}
