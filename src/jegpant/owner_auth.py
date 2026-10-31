@@ -1,9 +1,9 @@
 """Single-owner device enrolment and signed-request verification primitives.
 
 The owner private key never enters this service. The service stores only public
-keys and verifies short-lived, device-signed requests. Device state and replay
-tracking are process-local prototypes; production requires transactional durable
-state, rate limiting, audit logging, hardware-backed key adapters, and review.
+keys and verifies short-lived, device-signed requests. State is delegated to an
+atomic OwnerStateStore; use SQLiteOwnerStateStore for restart-persistent replay,
+enrolment, revocation and owner-approval state.
 """
 
 from __future__ import annotations
@@ -11,11 +11,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-from functools import wraps
-from threading import RLock
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Callable
+from functools import wraps
+from threading import RLock
+from typing import Callable, Protocol
 from uuid import UUID
 
 from cryptography.exceptions import InvalidSignature
@@ -25,7 +25,7 @@ from .memory import SignedOwnerApproval
 
 
 def _synchronized(method):
-    """Serialize state-changing operations on one verifier instance."""
+    """Serialize calls within one process; the state store arbitrates across processes."""
 
     @wraps(method)
     def wrapped(self, *args, **kwargs):
@@ -95,6 +95,43 @@ class DeviceRecord:
     scopes: frozenset[str]
     enrolled_at: str
     revoked_at: str | None = None
+
+
+class OwnerStateStore(Protocol):
+    """Atomic state boundary for single-owner device and approval authorization."""
+
+    instance_id: str
+
+    def register_device(self, enrollment_id: str, record: DeviceRecord) -> bool:
+        """Atomically register a device and consume an enrollment ID."""
+        ...
+
+    def get_device(self, device_id: str) -> DeviceRecord | None:
+        """Read a device registration."""
+        ...
+
+    def authorize_request(
+        self,
+        device_id: str,
+        required_scope: str,
+        request_id: str,
+        expires_at: str,
+    ) -> str:
+        """Atomically check active device/scope and consume a request ID.
+
+        Returns 'ok', 'inactive', 'scope', or 'replay'.
+        """
+        ...
+
+    def revoke_device(
+        self, device_id: str, revocation_id: str, revoked_at: str
+    ) -> DeviceRecord | None:
+        """Atomically consume a revocation ID and revoke an active device."""
+        ...
+
+    def consume_approval(self, approval_id: str, expires_at: str) -> bool:
+        """Atomically consume a one-time owner approval ID."""
+        ...
 
 
 def _canonical_json(payload: dict[str, object]) -> bytes:
@@ -205,7 +242,7 @@ def owner_approval_signing_bytes(approval: SignedOwnerApproval) -> bytes:
 
 
 class OwnerAuthorizationService:
-    """In-memory single-owner verifier for signed device operations."""
+    """Single-owner verifier whose state survives restarts when backed by SQLite."""
 
     def __init__(
         self,
@@ -215,6 +252,7 @@ class OwnerAuthorizationService:
         clock: Callable[[], datetime] | None = None,
         max_request_ttl_seconds: int = 60,
         max_enrollment_ttl_seconds: int = 300,
+        state_store: OwnerStateStore | None = None,
     ) -> None:
         try:
             UUID(instance_id)
@@ -224,15 +262,20 @@ class OwnerAuthorizationService:
         if max_request_ttl_seconds <= 0 or max_enrollment_ttl_seconds <= 0:
             raise ValueError("authorization TTL limits must be positive")
 
+        if state_store is None:
+            # Lazy import avoids a module cycle: the SQLite adapter uses DeviceRecord.
+            from .owner_state_store import InMemoryOwnerStateStore
+
+            state_store = InMemoryOwnerStateStore(instance_id)
+        if state_store.instance_id != instance_id:
+            raise ValueError("owner state store belongs to a different instance")
+
         self.instance_id = instance_id
         self._clock = clock or (lambda: datetime.now(UTC))
         self.max_request_ttl_seconds = max_request_ttl_seconds
         self.max_enrollment_ttl_seconds = max_enrollment_ttl_seconds
+        self.state_store = state_store
         self._lock = RLock()
-        self._devices: dict[str, DeviceRecord] = {}
-        self._enrollment_ids: set[str] = set()
-        self._request_ids: set[str] = set()
-        self._revocation_ids: set[str] = set()
 
     def _verify_owner(self, payload: bytes, signature_b64: str) -> None:
         signature = _decode_signature(signature_b64)
@@ -250,10 +293,6 @@ class OwnerAuthorizationService:
             UUID(enrollment.enrollment_id)
         except ValueError:
             raise OwnerAuthorizationError("device or enrollment ID is invalid") from None
-        if enrollment.device_id in self._devices:
-            raise OwnerAuthorizationError("device is already registered")
-        if enrollment.enrollment_id in self._enrollment_ids:
-            raise OwnerAuthorizationError("enrollment request has already been used")
         if not enrollment.scopes or not set(enrollment.scopes) <= ALLOWED_DEVICE_SCOPES:
             raise OwnerAuthorizationError("device requested unsupported permissions")
         if len(enrollment.scopes) != len(set(enrollment.scopes)):
@@ -264,7 +303,9 @@ class OwnerAuthorizationService:
             now=self._clock(),
             max_ttl_seconds=self.max_enrollment_ttl_seconds,
         ):
-            raise OwnerAuthorizationError("enrollment request is expired or outside its time window")
+            raise OwnerAuthorizationError(
+                "enrollment request is expired or outside its time window"
+            )
 
         payload = enrollment_signing_bytes(enrollment)
         self._verify_owner(payload, enrollment.owner_signature_b64)
@@ -275,9 +316,8 @@ class OwnerAuthorizationService:
         except ValueError:
             raise OwnerAuthorizationError("device public key is invalid") from None
         try:
-            device_public_key.verify(
-                _decode_signature(enrollment.device_proof_b64), payload
-            )
+            device_device_proof = _decode_signature(enrollment.device_proof_b64)
+            device_public_key.verify(device_device_proof, payload)
         except InvalidSignature:
             raise OwnerAuthorizationError("device key possession proof failed") from None
 
@@ -287,8 +327,10 @@ class OwnerAuthorizationService:
             scopes=frozenset(enrollment.scopes),
             enrolled_at=self._clock().astimezone(UTC).isoformat(),
         )
-        self._devices[record.device_id] = record
-        self._enrollment_ids.add(enrollment.enrollment_id)
+        if not self.state_store.register_device(enrollment.enrollment_id, record):
+            raise OwnerAuthorizationError(
+                "device or enrollment request has already been used"
+            )
         return record
 
     @_synchronized
@@ -307,33 +349,31 @@ class OwnerAuthorizationService:
             not request.path.startswith("/")
             or request.path.startswith("//")
             or "#" in request.path
-            or "\r" in request.path
-            or "\n" in request.path
+            or "\\r" in request.path
+            or "\\n" in request.path
         ):
             raise OwnerAuthorizationError("request path is not canonical")
         try:
             UUID(request.request_id)
         except ValueError:
             raise OwnerAuthorizationError("request ID must be a UUID") from None
-        if request.request_id in self._request_ids:
-            raise OwnerAuthorizationError("request replay detected")
         if not _valid_window(
             request.issued_at,
             request.expires_at,
             now=self._clock(),
             max_ttl_seconds=self.max_request_ttl_seconds,
         ):
-            raise OwnerAuthorizationError("request is expired or outside its time window")
+            raise OwnerAuthorizationError(
+                "request is expired or outside its time window"
+            )
 
         actual_digest = hashlib.sha256(body).hexdigest()
         if actual_digest != request.body_sha256:
             raise OwnerAuthorizationError("request body digest mismatch")
 
-        device = self._devices.get(request.device_id)
+        device = self.state_store.get_device(request.device_id)
         if device is None or device.revoked_at is not None:
             raise OwnerAuthorizationError("device is not enrolled or has been revoked")
-        if required_scope not in device.scopes:
-            raise OwnerAuthorizationError("device lacks the required permission")
 
         try:
             Ed25519PublicKey.from_public_bytes(device.public_key).verify(
@@ -343,8 +383,18 @@ class OwnerAuthorizationService:
         except InvalidSignature:
             raise OwnerAuthorizationError("device request signature is invalid") from None
 
-        # Record only fully authenticated, correctly scoped requests.
-        self._request_ids.add(request.request_id)
+        result = self.state_store.authorize_request(
+            request.device_id,
+            required_scope,
+            request.request_id,
+            request.expires_at,
+        )
+        if result == "replay":
+            raise OwnerAuthorizationError("request replay detected")
+        if result == "scope":
+            raise OwnerAuthorizationError("device lacks the required permission")
+        if result != "ok":
+            raise OwnerAuthorizationError("device is not enrolled or has been revoked")
         return device
 
     @_synchronized
@@ -355,41 +405,38 @@ class OwnerAuthorizationService:
             UUID(revocation.revocation_id)
         except ValueError:
             raise OwnerAuthorizationError("revocation ID is invalid") from None
-        if revocation.revocation_id in self._revocation_ids:
-            raise OwnerAuthorizationError("revocation request has already been used")
         if not _valid_window(
             revocation.issued_at,
             revocation.expires_at,
             now=self._clock(),
             max_ttl_seconds=self.max_request_ttl_seconds,
         ):
-            raise OwnerAuthorizationError("revocation is expired or outside its time window")
+            raise OwnerAuthorizationError(
+                "revocation is expired or outside its time window"
+            )
         self._verify_owner(
             revocation_signing_bytes(revocation),
             revocation.owner_signature_b64,
         )
 
-        device = self._devices.get(revocation.device_id)
-        if device is None:
-            raise OwnerAuthorizationError("device is not enrolled")
-        revoked = DeviceRecord(
-            device_id=device.device_id,
-            public_key=device.public_key,
-            scopes=device.scopes,
-            enrolled_at=device.enrolled_at,
-            revoked_at=self._clock().astimezone(UTC).isoformat(),
+        revoked = self.state_store.revoke_device(
+            revocation.device_id,
+            revocation.revocation_id,
+            self._clock().astimezone(UTC).isoformat(),
         )
-        self._devices[device.device_id] = revoked
-        self._revocation_ids.add(revocation.revocation_id)
+        if revoked is None:
+            raise OwnerAuthorizationError(
+                "device is unknown or already revoked, or revocation was replayed"
+            )
         return revoked
 
     @_synchronized
     def get_device(self, device_id: str) -> DeviceRecord | None:
-        return self._devices.get(device_id)
+        return self.state_store.get_device(device_id)
 
 
 class Ed25519ApprovalVerifier:
-    """Owner-signature verifier for MemoryCatalog promotion approvals."""
+    """Owner-signature verifier with persistent one-time approval consumption."""
 
     def __init__(
         self,
@@ -399,6 +446,7 @@ class Ed25519ApprovalVerifier:
         key_id: str,
         clock: Callable[[], datetime] | None = None,
         max_approval_ttl_seconds: int = 300,
+        state_store: OwnerStateStore | None = None,
     ) -> None:
         try:
             self._owner_key = Ed25519PublicKey.from_public_bytes(owner_public_key)
@@ -407,12 +455,19 @@ class Ed25519ApprovalVerifier:
             raise ValueError("instance ID or owner public key is invalid") from exc
         if not key_id.strip() or max_approval_ttl_seconds <= 0:
             raise ValueError("key ID and positive approval TTL are required")
+        if state_store is None:
+            from .owner_state_store import InMemoryOwnerStateStore
+
+            state_store = InMemoryOwnerStateStore(instance_id)
+        if state_store.instance_id != instance_id:
+            raise ValueError("owner state store belongs to a different instance")
+
         self.instance_id = instance_id
         self.key_id = key_id
         self._clock = clock or (lambda: datetime.now(UTC))
         self.max_approval_ttl_seconds = max_approval_ttl_seconds
+        self.state_store = state_store
         self._lock = RLock()
-        self._used_approval_ids: set[str] = set()
 
     @_synchronized
     def verify(self, approval: SignedOwnerApproval) -> bool:
@@ -420,17 +475,21 @@ class Ed25519ApprovalVerifier:
             approval.instance_id != self.instance_id
             or approval.key_id != self.key_id
             or not approval.approval_id
-            or approval.approval_id in self._used_approval_ids
         ):
             return False
         try:
             expires = _parse_time(approval.expires_at)
             now = self._clock().astimezone(UTC)
-            signature = approval.signature
-            if expires <= now or (expires - now).total_seconds() > self.max_approval_ttl_seconds:
+            if (
+                expires <= now
+                or (expires - now).total_seconds() > self.max_approval_ttl_seconds
+            ):
                 return False
-            self._owner_key.verify(signature, owner_approval_signing_bytes(approval))
+            self._owner_key.verify(
+                approval.signature, owner_approval_signing_bytes(approval)
+            )
         except (OwnerAuthorizationError, InvalidSignature, TypeError, ValueError):
             return False
-        self._used_approval_ids.add(approval.approval_id)
-        return True
+        return self.state_store.consume_approval(
+            approval.approval_id, approval.expires_at
+        )
