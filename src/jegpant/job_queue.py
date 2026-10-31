@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
@@ -147,7 +148,7 @@ class AnalysisJobQueue:
         ).encode("utf-8")
 
     def _seal(self, job_id: str, case_id: str, goal: str) -> tuple[bytes, bytes]:
-        nonce = __import__("os").urandom(self.NONCE_BYTES)
+        nonce = os.urandom(self.NONCE_BYTES)
         plaintext = json.dumps(
             {"goal": goal}, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
@@ -199,7 +200,7 @@ class AnalysisJobQueue:
             raise ValueError("goal must be a non-empty string")
         if len(goal) > 12000:
             raise ValueError("goal exceeds the configured length limit")
-        if isinstance(max_attempts, bool) or not 1 <= max_attempts <= 10:
+        if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or not 1 <= max_attempts <= 10:
             raise ValueError("max_attempts must be between 1 and 10")
 
         job_id = str(uuid4())
@@ -251,6 +252,21 @@ class AnalysisJobQueue:
         try:
             with closing(self._connect()) as connection:
                 connection.execute("BEGIN IMMEDIATE")
+                connection.execute(
+                    """
+                    UPDATE analysis_jobs
+                    SET status = 'failed', worker_id = NULL,
+                        lease_expires_at = NULL,
+                        error_code = 'lease_expired_max_attempts', updated_at = ?
+                    WHERE instance_id = ? AND status = 'running'
+                      AND lease_expires_at < ? AND attempts >= max_attempts
+                    """,
+                    (
+                        updated_at,
+                        self.instance_id,
+                        now,
+                    ),
+                )
                 row = connection.execute(
                     """
                     SELECT job_id, case_id, key_version, schema_version,
