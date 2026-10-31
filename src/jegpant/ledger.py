@@ -12,7 +12,7 @@ import json
 import os
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -65,9 +65,12 @@ class EvidenceLedger:
             raise ValueError("source_start_ms must be non-negative")
         if source_end_ms is not None and source_end_ms < 0:
             raise ValueError("source_end_ms must be non-negative")
-        if source_start_ms is not None and source_end_ms is not None:
-            if source_end_ms < source_start_ms:
-                raise ValueError("source_end_ms must be >= source_start_ms")
+        if (
+            source_start_ms is not None
+            and source_end_ms is not None
+            and source_end_ms < source_start_ms
+        ):
+            raise ValueError("source_end_ms must be >= source_start_ms")
 
         with self._lock:
             existing = self.read_all()
@@ -76,7 +79,7 @@ class EvidenceLedger:
                 "schema_version": 1,
                 "record_id": str(uuid.uuid4()),
                 "case_id": case_id,
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
                 "source_ref": source_ref,
                 "modality": modality,
                 "observation": observation,
