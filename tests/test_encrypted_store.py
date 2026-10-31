@@ -13,7 +13,7 @@ from jegpant.memory import MemoryKind, MemoryRecord, MemorySensitivity
 INSTANCE_ID = str(uuid4())
 
 
-class TestKeyProvider:
+class FakeKeyProvider:
     def __init__(self):
         self.keys = {1: b"1" * 32, 2: b"2" * 32}
 
@@ -38,7 +38,7 @@ def sample_record(instance_id=INSTANCE_ID):
 
 def test_round_trip_encrypted_memory(tmp_path):
     path = tmp_path / "memory.sqlite"
-    keys = TestKeyProvider()
+    keys = FakeKeyProvider()
     record = sample_record()
 
     with EncryptedMemoryStore(
@@ -56,7 +56,7 @@ def test_round_trip_encrypted_memory(tmp_path):
 def test_database_ciphertext_tampering_is_detected(tmp_path):
     path = tmp_path / "memory.sqlite"
     store = EncryptedMemoryStore(
-        path, instance_id=INSTANCE_ID, key_provider=TestKeyProvider()
+        path, instance_id=INSTANCE_ID, key_provider=FakeKeyProvider()
     )
     record = sample_record()
     store.put(record)
@@ -82,13 +82,13 @@ def test_database_ciphertext_tampering_is_detected(tmp_path):
 def test_database_is_bound_to_cognitive_instance(tmp_path):
     path = tmp_path / "memory.sqlite"
     store = EncryptedMemoryStore(
-        path, instance_id=INSTANCE_ID, key_provider=TestKeyProvider()
+        path, instance_id=INSTANCE_ID, key_provider=FakeKeyProvider()
     )
     store.put(sample_record())
     store.close()
 
     other_store = EncryptedMemoryStore(
-        path, instance_id=str(uuid4()), key_provider=TestKeyProvider()
+        path, instance_id=str(uuid4()), key_provider=FakeKeyProvider()
     )
     with pytest.raises(StorageIntegrityError):
         other_store.get("memory-001")
@@ -97,7 +97,7 @@ def test_database_is_bound_to_cognitive_instance(tmp_path):
 
 def test_key_rotation_reencrypts_existing_records(tmp_path):
     path = tmp_path / "memory.sqlite"
-    keys = TestKeyProvider()
+    keys = FakeKeyProvider()
     record = sample_record()
 
     with EncryptedMemoryStore(
@@ -118,12 +118,12 @@ def test_key_rotation_reencrypts_existing_records(tmp_path):
 def test_wrong_key_cannot_decrypt_memory(tmp_path):
     path = tmp_path / "memory.sqlite"
     writer = EncryptedMemoryStore(
-        path, instance_id=INSTANCE_ID, key_provider=TestKeyProvider()
+        path, instance_id=INSTANCE_ID, key_provider=FakeKeyProvider()
     )
     writer.put(sample_record())
     writer.close()
 
-    wrong_keys = TestKeyProvider()
+    wrong_keys = FakeKeyProvider()
     wrong_keys.keys[1] = b"x" * 32
     reader = EncryptedMemoryStore(
         path, instance_id=INSTANCE_ID, key_provider=wrong_keys
@@ -136,7 +136,7 @@ def test_wrong_key_cannot_decrypt_memory(tmp_path):
 def test_delete_removes_record_from_catalogue(tmp_path):
     path = tmp_path / "memory.sqlite"
     with EncryptedMemoryStore(
-        path, instance_id=INSTANCE_ID, key_provider=TestKeyProvider()
+        path, instance_id=INSTANCE_ID, key_provider=FakeKeyProvider()
     ) as store:
         store.put(sample_record())
         assert store.delete("memory-001") is True
@@ -148,7 +148,7 @@ def test_memory_store_rejects_wrong_instance_on_write(tmp_path):
     with EncryptedMemoryStore(
         tmp_path / "memory.sqlite",
         instance_id=INSTANCE_ID,
-        key_provider=TestKeyProvider(),
+        key_provider=FakeKeyProvider(),
     ) as store:
         with pytest.raises(PermissionError):
             store.put(sample_record(str(uuid4())))
