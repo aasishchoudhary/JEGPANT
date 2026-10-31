@@ -1,4 +1,3 @@
-import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -161,7 +160,7 @@ def test_worker_cannot_complete_after_lease_expiry(tmp_path):
 def test_job_payload_authentication_fails_with_wrong_key(tmp_path):
     path = tmp_path / "jobs.sqlite"
     queue = make_queue(path)
-    job_id = queue.enqueue(case_id=str(uuid4()), goal="Private goal.")
+    queue.enqueue(case_id=str(uuid4()), goal="Private goal.")
     queue.close()
 
     class WrongKey:
