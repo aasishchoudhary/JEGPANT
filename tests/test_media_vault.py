@@ -187,3 +187,96 @@ def test_invalid_asset_id_is_rejected(tmp_path):
     vault = make_vault(tmp_path)
     with pytest.raises(ValueError, match="UUID"):
         vault.decrypt_file("../../outside", tmp_path / "out.bin")
+
+
+
+def test_async_stream_upload_encrypts_without_plaintext_staging(tmp_path):
+    import asyncio
+
+    data = bytes(range(256)) * 900
+    digest = hashlib.sha256(data).hexdigest()
+    vault = make_vault(tmp_path)
+    asset_id = str(uuid4())
+
+    async def chunks():
+        for offset in range(0, len(data), 7777):
+            yield data[offset:offset + 7777]
+
+    entry = asyncio.run(
+        vault.encrypt_stream(
+            chunks(),
+            asset_id=asset_id,
+            expected_size_bytes=len(data),
+            expected_sha256=digest,
+        )
+    )
+    assert entry.sha256 == digest
+    assert entry.size_bytes == len(data)
+    assert entry.chunk_count == 4
+
+    encrypted_path = vault._asset_path(asset_id)
+    assert data not in encrypted_path.read_bytes()
+
+    restored = tmp_path / "stream-restored.bin"
+    vault.decrypt_file(asset_id, restored)
+    assert restored.read_bytes() == data
+
+
+def test_async_stream_upload_rejects_wrong_digest_and_removes_partial_asset(tmp_path):
+    import asyncio
+
+    data = b"streamed-private-data" * 10000
+    vault = make_vault(tmp_path)
+    asset_id = str(uuid4())
+
+    async def chunks():
+        yield data[:50000]
+        yield data[50000:]
+
+    with pytest.raises(MediaVaultIntegrityError, match="did not match"):
+        asyncio.run(
+            vault.encrypt_stream(
+                chunks(),
+                asset_id=asset_id,
+                expected_size_bytes=len(data),
+                expected_sha256="0" * 64,
+            )
+        )
+    assert not vault._asset_path(asset_id).exists()
+
+
+def test_async_stream_upload_rejects_short_and_long_uploads(tmp_path):
+    import asyncio
+
+    vault = make_vault(tmp_path)
+    short_id = str(uuid4())
+    long_id = str(uuid4())
+
+    async def short_chunks():
+        yield b"short"
+
+    async def long_chunks():
+        yield b"this is longer than expected"
+
+    with pytest.raises(MediaVaultError, match="ended before"):
+        asyncio.run(
+            vault.encrypt_stream(
+                short_chunks(),
+                asset_id=short_id,
+                expected_size_bytes=100,
+                expected_sha256=hashlib.sha256(b"x" * 100).hexdigest(),
+            )
+        )
+    assert not vault._asset_path(short_id).exists()
+
+    long_data = b"this is longer than expected"
+    with pytest.raises(MediaVaultError, match="exceeds"):
+        asyncio.run(
+            vault.encrypt_stream(
+                long_chunks(),
+                asset_id=long_id,
+                expected_size_bytes=5,
+                expected_sha256=hashlib.sha256(b"12345").hexdigest(),
+            )
+        )
+    assert not vault._asset_path(long_id).exists()
