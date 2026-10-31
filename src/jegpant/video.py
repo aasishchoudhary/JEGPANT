@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from fractions import Fraction
+from math import isfinite
 from typing import Any
 from uuid import uuid4
 
@@ -19,7 +20,7 @@ def _parse_rate(value: str | None) -> float | None:
         rate = float(Fraction(value))
     except (ValueError, ZeroDivisionError):
         return None
-    return rate if rate > 0 else None
+    return rate if isfinite(rate) and rate > 0 else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +41,11 @@ class VideoMetadata:
             raise ValueError("duration_ms must be positive")
         if self.width <= 0 or self.height <= 0:
             raise ValueError("video dimensions must be positive")
-        if len(self.source_sha256) != 64:
+        if self.average_frame_rate is not None and (
+            not isfinite(self.average_frame_rate) or self.average_frame_rate <= 0
+        ):
+            raise ValueError("average_frame_rate must be finite and positive")
+        if not isinstance(self.source_sha256, str) or len(self.source_sha256) != 64:
             raise ValueError("source_sha256 must be a 64-character SHA-256 hex digest")
         try:
             int(self.source_sha256, 16)
@@ -53,8 +58,10 @@ class VideoMetadata:
     ) -> VideoMetadata:
         """Create metadata from ffprobe JSON using format and stream fields."""
         streams = payload.get("streams")
-        if not isinstance(streams, list):
-            raise TypeError("ffprobe payload must contain a streams list")
+        if not isinstance(streams, list) or any(
+            not isinstance(stream, dict) for stream in streams
+        ):
+            raise TypeError("ffprobe payload must contain a list of stream objects")
         video_stream = next(
             (stream for stream in streams if stream.get("codec_type") == "video"),
             None,
@@ -63,6 +70,8 @@ class VideoMetadata:
             raise ValueError("no video stream found")
 
         format_data = payload.get("format") or {}
+        if not isinstance(format_data, dict):
+            raise TypeError("ffprobe format metadata must be an object")
         duration = format_data.get("duration") or video_stream.get("duration")
         if duration is None:
             raise ValueError("video duration is missing")
@@ -99,6 +108,7 @@ class TimelineEvent:
     event_id: str = field(default_factory=lambda: str(uuid4()))
     track_ids: tuple[str, ...] = field(default_factory=tuple)
     limitations: tuple[str, ...] = field(default_factory=tuple)
+    extraction_confidence: float | None = None
 
     def __post_init__(self) -> None:
         for name in ("asset_id", "event_type", "observation", "extractor"):
@@ -106,6 +116,11 @@ class TimelineEvent:
                 raise ValueError(f"{name} must not be empty")
         if self.start_ms < 0 or self.end_ms < self.start_ms:
             raise ValueError("event timestamps must satisfy 0 <= start_ms <= end_ms")
+        if self.extraction_confidence is not None and (
+            not isfinite(self.extraction_confidence)
+            or not 0.0 <= self.extraction_confidence <= 1.0
+        ):
+            raise ValueError("extraction_confidence must be between 0 and 1")
 
 
 class VideoTimeline:
