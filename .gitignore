@@ -37,3 +37,14 @@ videos/
 .idea/
 .DS_Store
 Thumbs.db
+
+
+# Android Gradle / Studio
+.gradle/
+local.properties
+**/build/
+*.iml
+*.apk
+*.aab
+*.jks
+*.keystore
