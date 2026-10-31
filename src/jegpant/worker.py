@@ -8,7 +8,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from .case_store import EncryptedCaseStore
-from .job_queue import AnalysisJobQueue, JobClaim
+from .job_queue import JobClaim
 from .runtime import CognitiveRuntime
 
 
