@@ -6,7 +6,7 @@ JEGPANT is being developed as a persistent cognitive system, not a character sim
 
 The implementation is being built as a hybrid system: explicit cognitive state and typed evidence models, deterministic controls, specialist processors, and model-provider adapters. A language model is a reasoning component—not the identity, memory, policy engine, or complete mind.
 
-> **Development status:** foundation and prototype stage. The repository now contains an encrypted SQLite memory-record store with an external key-provider interface, local video metadata intake, a deterministic epistemic core, a loopback-default inference adapter, a structured hypothesis generator, architecture specifications, and automated tests. It does not yet contain production owner key custody, owner recovery, a deployed private backend, an Android application, a trained model, or validated psychological inference.
+> **Development status:** foundation and prototype stage. The repository now contains an encrypted SQLite memory-record store with an external key-provider interface, Ed25519 owner/device authorization primitives, local video metadata intake, a deterministic epistemic core, a loopback-default inference adapter, a structured hypothesis generator, architecture specifications, and automated tests. It does not yet contain production owner key custody, durable cross-process replay protection, owner recovery, a deployed private backend, an Android application, a trained model, or validated psychological inference.
 
 ## Non-negotiable design principles
 
@@ -23,6 +23,7 @@ The implementation is being built as a hybrid system: explicit cognitive state a
 
 - [x] Establish project charter, cognitive architecture, and system boundaries.
 - [x] Define single-owner identity, device trust, recovery, and privacy model.
+- [x] Add Ed25519 owner-signed device enrolment, scoped signed requests, replay checks and device revocation primitives.
 - [x] Define asynchronous post-hoc video evidence pipeline.
 - [x] Add local video hashing and bounded ffprobe metadata intake.
 - [x] Add append-only evidence ledger with hash-chain verification.
@@ -35,8 +36,9 @@ The implementation is being built as a hybrid system: explicit cognitive state a
 - [x] Add key-version rotation and ciphertext integrity tests.
 - [x] Add forecast resolution and Brier-score calibration primitives.
 - [x] Add loopback-default OpenAI-compatible inference client and structured hypothesis generation.
-- [x] Add GitHub Actions matrix, compile and Ruff checks.
+- [x] Add GitHub Actions matrix, compile and Ruff checks (77 tests in the last verified run before the concurrency tests).
 - [ ] Implement production Android Keystore/HSM-backed key provider and owner recovery.
+- [ ] Move device registry and replay/approval state to a durable transactional store for multi-worker deployments.
 - [ ] Implement encrypted media vault, upload workflow, and sandboxed media workers.
 - [ ] Implement encrypted backup/restore and deletion lifecycle.
 - [ ] Implement durable cognitive-state orchestration and temporal knowledge graph.
@@ -68,12 +70,12 @@ The video intake helper only hashes and probes metadata. It does not decode fram
 
 ## Repository map
 
-- `src/jegpant/` — evidence, claims, hypotheses, ACH, video, media intake, memory, encrypted storage, workspace, metacognition, and inference primitives.
+- `src/jegpant/` — evidence, claims, hypotheses, ACH, video intake, owner authorization, memory, encrypted storage, workspace, metacognition, and inference primitives.
 - `tests/` — executable behavioural, integrity, encryption, and media-intake tests.
 - `docs/PRODUCT_CHARTER.md` — product definition and non-goals.
 - `docs/COGNITIVE_ARCHITECTURE.md` — cognitive processes, state, specialist roles, and memory lifecycle.
 - `docs/SYSTEM_ARCHITECTURE.md` — deployment boundaries and data flow.
-- `docs/OWNER_SECURITY_MODEL.md` — owner identity, device trust, keys, and recovery.
+- `docs/OWNER_SECURITY_MODEL.md` — owner identity, implemented Ed25519 device authorization, key boundaries, and recovery.
 - `docs/VIDEO_EVIDENCE_PIPELINE.md` — asynchronous video ingestion and evidence traceability.
 - `docs/MEMORY_AND_METACOGNITION.md` — encrypted memory prototype, memory promotion, key rotation, and calibration.
 - `docs/INFERENCE_BOUNDARY.md` — model-provider boundary and privacy controls.
